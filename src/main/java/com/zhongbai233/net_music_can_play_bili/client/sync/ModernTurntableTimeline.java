@@ -1,0 +1,247 @@
+package com.zhongbai233.net_music_can_play_bili.client.sync;
+
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.VisualTimelineSmoother;
+import com.zhongbai233.net_music_can_play_bili.client.audio.ClientAudioOutputRegistry;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * 现代唱片机客户端稳定媒体时间线。
+ *
+ * <p>
+ * 服务端 {@link ModernTurntableBlockEntity} 的 tick 时钟仍然是权威全局时间线；
+ * 但渲染、音频和字幕代码应该读取 {@link #mediaMillis(BlockPos)} 提供的平滑本地时间线。
+ * 这样所有本地媒体输出都会对齐到同一个单调时钟，同时仍允许服务端周期性校正，
+ * 而不会把每个同步包都变成硬重启或重新 seek。
+ * </p>
+ */
+public final class ModernTurntableTimeline {
+    private static final TimelineProperties.Turntable PROPERTIES = TimelineProperties.turntable();
+    private static final boolean AUDIO_ANCHORED_LOCAL_TIMELINE = PROPERTIES.audioAnchored();
+    private static final long AUDIO_ANCHOR_MAX_LAG_MILLIS = PROPERTIES.audioAnchorMaxLagMillis();
+    private static final long AUDIO_ANCHOR_MAX_LEAD_MILLIS = PROPERTIES.audioAnchorMaxLeadMillis();
+    private static final long CLOCK_PRUNE_INTERVAL_NANOS = PROPERTIES.clockPruneIntervalNanos();
+    private static final long VISUAL_HARD_SYNC_MILLIS = PROPERTIES.visualHardSyncMillis();
+    private static final long VISUAL_MAX_CORRECTION_MILLIS = PROPERTIES.visualMaxCorrectionMillis();
+    private static final double VISUAL_CORRECTION_RATIO = PROPERTIES.visualCorrectionRatio();
+    private static final ConcurrentHashMap<BlockPos, MediaTimelineClock> CLOCKS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<BlockPos, VisualState> VISUAL_CLOCKS = new ConcurrentHashMap<>();
+    private static volatile long lastClockPruneNanos;
+
+    private ModernTurntableTimeline() {
+    }
+
+    public static long mediaMillis(BlockPos turntablePos) {
+        TimelineSnapshot snapshot = snapshot(turntablePos);
+        return snapshot.mediaMillis();
+    }
+
+    /**
+     * 用于字幕/投影等视觉效果的连续本地媒体时钟。
+     *
+     * <p>
+     * {@link #mediaMillis(BlockPos)} 默认会锚定到 OpenAL 的可听位置；当前音频位置以
+     * 20Hz tick 公开，适合同步歌词行，但直接驱动滚动动画会产生 50ms 台阶感。
+     * 视觉渲染使用本地平滑时钟，保留服务端平滑校正，但不套用音频输出 tick 锚定。
+     * </p>
+     */
+    public static long visualMillis(BlockPos turntablePos) {
+        TimelineSnapshot snapshot = snapshot(turntablePos);
+        return snapshot.visualMillis();
+    }
+
+    /**
+     * 用于音频喂入/泵送的服务端平滑时钟。
+     *
+     * <p>
+     * 不要把这个时钟锚定到音频输出，否则音频 pacing 会追逐自己的已消费位置，
+     * 最终可能把 OpenAL 缓冲区喂空。
+     * </p>
+     */
+    public static long pacingMillis(BlockPos turntablePos) {
+        TimelineSnapshot snapshot = snapshot(turntablePos);
+        return snapshot.pacingMillis();
+    }
+
+    public static long serverMillis(BlockPos turntablePos) {
+        TimelineSnapshot snapshot = snapshot(turntablePos);
+        return snapshot.serverMillis();
+    }
+
+    public static TimelineSnapshot snapshot(BlockPos turntablePos) {
+        pruneStaleClocksIfNeeded();
+        ModernTurntableBlockEntity turntable = turntable(turntablePos);
+        if (turntable == null || !turntable.isPlaying()) {
+            forget(turntablePos);
+            return TimelineSnapshot.EMPTY;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft == null || minecraft.level == null) {
+            return TimelineSnapshot.EMPTY;
+        }
+        PlaybackSync.Metadata sync = turntable.getPlaybackSyncMetadata();
+        long rawServerMillis = sync.hasSession() ? sync.elapsedMillis()
+                : turntable.getPlaybackElapsedMillis();
+        long totalMillis = sync.hasSession() ? sync.totalMillis()
+                : Math.max(0L, turntable.getDurationSeconds()) * 1000L;
+        final long serverMillis = clamp(rawServerMillis, totalMillis);
+        final long timelineTotalMillis = totalMillis;
+            final long observationGameTime = MonotonicMediaClock.nowTick();
+        Optional<PlaybackSessionId> playbackSessionId = sync.playbackSessionId();
+        BlockPos key = turntablePos.immutable();
+        MediaTimelineClock clock = CLOCKS.compute(key, (ignored, existing) -> {
+            if (existing == null || !existing.isForSession(playbackSessionId)) {
+                return MediaTimelineClock.start(playbackSessionId, serverMillis, timelineTotalMillis);
+            }
+                existing.observeServerOnce(observationGameTime, serverMillis, timelineTotalMillis);
+            return existing;
+        });
+        long pacingMillis = clock != null ? clock.pacingMillis() : serverMillis;
+        long mediaMillis = audioAnchoredMillis(key, pacingMillis, timelineTotalMillis);
+        mediaMillis = clamp(mediaMillis, timelineTotalMillis);
+        pacingMillis = clamp(pacingMillis, timelineTotalMillis);
+        long nowNanos = System.nanoTime();
+        VisualState visualState = VISUAL_CLOCKS.compute(key, (ignored, existing) -> {
+            if (existing == null || !existing.playbackSessionId().equals(playbackSessionId)) {
+                return new VisualState(playbackSessionId, new VisualTimelineSmoother(VISUAL_HARD_SYNC_MILLIS,
+                        VISUAL_MAX_CORRECTION_MILLIS, VISUAL_CORRECTION_RATIO));
+            }
+            return existing;
+        });
+        long visualMillis = visualState.smoother().sample(mediaMillis, timelineTotalMillis, nowNanos);
+        return new TimelineSnapshot(playbackSessionId, mediaMillis, visualMillis, serverMillis, pacingMillis,
+                timelineTotalMillis, mediaMillis - serverMillis);
+    }
+
+    private static long audioAnchoredMillis(BlockPos turntablePos, long fallbackMillis, long totalMillis) {
+        long fallback = clamp(fallbackMillis, totalMillis);
+        if (!AUDIO_ANCHORED_LOCAL_TIMELINE || turntablePos == null) {
+            return fallback;
+        }
+        long audibleMillis = ClientAudioOutputRegistry.getAudioTimeline(turntablePos).audibleMillis();
+        if (audibleMillis < 0L) {
+            return fallback;
+        }
+        long clampedAudio = clamp(audibleMillis, totalMillis);
+        long lag = fallback - clampedAudio;
+        if (lag > Math.max(0L, AUDIO_ANCHOR_MAX_LAG_MILLIS)
+                || -lag > Math.max(0L, AUDIO_ANCHOR_MAX_LEAD_MILLIS)) {
+            return fallback;
+        }
+        return clampedAudio;
+    }
+
+    public static void forget(BlockPos turntablePos) {
+        if (turntablePos != null) {
+            CLOCKS.remove(turntablePos);
+            VISUAL_CLOCKS.remove(turntablePos);
+        }
+    }
+
+    public static void forgetSession(String sessionId) {
+        PlaybackSessionId playbackSessionId = PlaybackSessionId.parse(sessionId).orElse(null);
+        if (playbackSessionId == null) {
+            return;
+        }
+        Optional<PlaybackSessionId> key = Optional.of(playbackSessionId);
+        CLOCKS.entrySet().removeIf(entry -> entry.getValue().isForSession(key));
+        VISUAL_CLOCKS.entrySet().removeIf(entry -> entry.getValue().playbackSessionId().equals(key));
+    }
+
+    /** 客户端断连/切世界时主动清空本地媒体时钟。 */
+    public static void clear() {
+        CLOCKS.clear();
+        VISUAL_CLOCKS.clear();
+        lastClockPruneNanos = 0L;
+    }
+
+    public static int mediaTick(BlockPos turntablePos) {
+        long millis = mediaMillis(turntablePos);
+        if (millis < 0L) {
+            return -1;
+        }
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, Math.round(millis / 50.0D)));
+    }
+
+    public static long relativeNanos(BlockPos turntablePos, long absoluteStartMillis) {
+        long millis = mediaMillis(turntablePos);
+        if (millis < 0L) {
+            return -1L;
+        }
+        return Math.max(0L, millis - Math.max(0L, absoluteStartMillis)) * 1_000_000L;
+    }
+
+    public static ModernTurntableBlockEntity turntable(BlockPos turntablePos) {
+        if (turntablePos == null) {
+            return null;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft == null || minecraft.level == null) {
+            return null;
+        }
+        if (minecraft.level.getBlockEntity(turntablePos) instanceof ModernTurntableBlockEntity turntable) {
+            return turntable;
+        }
+        return null;
+    }
+
+    private static long clamp(long millis, long totalMillis) {
+        return MediaTimelineClock.clamp(millis, totalMillis);
+    }
+
+    private static void pruneStaleClocksIfNeeded() {
+        long now = System.nanoTime();
+        if (now - lastClockPruneNanos < CLOCK_PRUNE_INTERVAL_NANOS) {
+            return;
+        }
+        lastClockPruneNanos = now;
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft == null || minecraft.level == null || CLOCKS.isEmpty()) {
+            CLOCKS.clear();
+            VISUAL_CLOCKS.clear();
+            return;
+        }
+        CLOCKS.entrySet().removeIf(entry -> {
+            BlockPos pos = entry.getKey();
+            return !(minecraft.level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable)
+                    || !turntable.isPlaying()
+                    || !entry.getValue().isForSession(turntable.getPlaybackSyncMetadata().playbackSessionId());
+        });
+        VISUAL_CLOCKS.keySet().removeIf(pos -> !CLOCKS.containsKey(pos));
+    }
+
+    private record VisualState(Optional<PlaybackSessionId> playbackSessionId, VisualTimelineSmoother smoother) {
+        private VisualState {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+    }
+
+    public record TimelineSnapshot(Optional<PlaybackSessionId> playbackSessionId, long mediaMillis,
+            long visualMillis, long serverMillis,
+            long pacingMillis, long totalMillis, long mediaDriftMillis) {
+        public static final TimelineSnapshot EMPTY = new TimelineSnapshot(
+                Optional.empty(), -1L, -1L, -1L, -1L, 0L, 0L);
+
+        public TimelineSnapshot {
+            playbackSessionId = playbackSessionId != null ? playbackSessionId : Optional.empty();
+        }
+
+        public TimelineSnapshot(String sessionId, long mediaMillis, long visualMillis, long serverMillis,
+                long pacingMillis, long totalMillis, long mediaDriftMillis) {
+            this(PlaybackSessionId.parse(sessionId), mediaMillis, visualMillis, serverMillis, pacingMillis,
+                    totalMillis, mediaDriftMillis);
+        }
+
+        public String sessionId() {
+            return playbackSessionId.map(session -> session.value()).orElse("");
+        }
+    }
+}

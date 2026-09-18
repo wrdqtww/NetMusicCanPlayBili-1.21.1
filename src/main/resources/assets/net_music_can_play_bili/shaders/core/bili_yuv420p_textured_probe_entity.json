@@ -1,0 +1,7 @@
+{
+    "vertex": "net_music_can_play_bili:bili_video_entity",
+    "fragment": "net_music_can_play_bili:yuv420p_textured_probe_entity",
+    "samplers": [
+        { "name": "Sampler0" }
+    ]
+}

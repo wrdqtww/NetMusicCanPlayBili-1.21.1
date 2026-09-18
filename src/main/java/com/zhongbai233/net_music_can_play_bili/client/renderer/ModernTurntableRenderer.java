@@ -1,0 +1,166 @@
+package com.zhongbai233.net_music_can_play_bili.client.renderer;
+
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+
+import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
+import com.github.tartaricacid.netmusic.client.event.ConfigEvent;
+import com.github.tartaricacid.netmusic.config.GeneralConfig;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
+import com.zhongbai233.net_music_can_play_bili.link.ClientLinkRegistry;
+import com.zhongbai233.net_music_can_play_bili.port.shim.PortSubmitNodeCollector;
+import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.core.Direction;
+
+public class ModernTurntableRenderer
+        implements BlockEntityRenderer<ModernTurntableBlockEntity> {
+    private static final float TEXT_SCALE = 0.025F;
+    private static final float TRANSLATED_LINE_OFFSET = 12.0F;
+
+    private final Font font;
+    private final NetMusicDiscModelAdapter discModel;
+
+    public ModernTurntableRenderer(BlockEntityRendererProvider.Context context) {
+        this.font = context.getFont();
+        this.discModel = new NetMusicDiscModelAdapter(context);
+    }
+
+    @Override
+    public void render(ModernTurntableBlockEntity turntable, float partialTick, PoseStack poseStack,
+            MultiBufferSource bufferSource, int packedLight, int packedOverlay) {
+        State state = extract(turntable, partialTick, packedLight);
+        discModel.submit(state.hasDisc, state.playing, state.facing, state.gameTime, state.partialTick,
+                packedLight, poseStack, bufferSource);
+
+        boolean hasCurrent = state.currentLine != null && !state.currentLine.getString().isBlank();
+        boolean hasTranslated = state.translatedLine != null && !state.translatedLine.getString().isBlank();
+        if (!hasCurrent && !hasTranslated) {
+            return;
+        }
+
+        PortSubmitNodeCollector collector = new PortSubmitNodeCollector(bufferSource);
+        try {
+            poseStack.pushPose();
+            poseStack.translate(0.5D, 1.625D, 0.5D);
+            var camera = Minecraft.getInstance().gameRenderer.getMainCamera();
+            poseStack.mulPose(Axis.YN.rotationDegrees(camera.getYRot()));
+            poseStack.mulPose(Axis.XN.rotationDegrees(-camera.getXRot()));
+            poseStack.scale(-TEXT_SCALE, -TEXT_SCALE, -TEXT_SCALE);
+
+            if (hasCurrent) {
+                submitCenteredText(state.currentLine, -state.y, state.currentLyricColor, state, poseStack, collector);
+            }
+            if (hasTranslated) {
+                submitCenteredText(state.translatedLine, -state.y - TRANSLATED_LINE_OFFSET, state.transLyricColor,
+                        state, poseStack, collector);
+            }
+
+            poseStack.popPose();
+        } finally {
+            collector.end();
+        }
+    }
+
+    private State extract(ModernTurntableBlockEntity turntable, float partialTick, int packedLight) {
+        State state = new State();
+        state.lightCoords = packedLight;
+        state.currentLine = Component.empty();
+        state.translatedLine = null;
+        state.currentLyricColor = ConfigEvent.PLAYER_ORIGINAL_COLOR;
+        state.transLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
+        state.y = 0.5F;
+        state.projected = false;
+        state.hasDisc = turntable.hasDisc();
+        state.playing = turntable.isPlaying();
+        state.facing = turntable.getBlockState().getValue(ModernTurntableBlock.FACING);
+        state.gameTime = turntable.getLevel() != null ? MonotonicMediaClock.nowTick() : 0L;
+        state.partialTick = partialTick;
+
+        if (!GeneralConfig.ENABLE_PLAYER_LYRICS.get() || !turntable.isPlaying()) {
+            return state;
+        }
+
+        if (isLinkedToProjector(turntable)) {
+            state.projected = true;
+            state.currentLine = Component.translatable(
+                    "message.net_music_can_play_bili.modern_turntable.projected");
+            state.currentLyricColor = 0xFFAAAAAA;
+            return state;
+        }
+
+        LyricRecord lyricRecord = turntable.getClientLyricRecord();
+        if (lyricRecord == null) {
+            return state;
+        }
+
+        String current = currentLine(lyricRecord.getLyrics());
+        String translated = currentLine(lyricRecord.getTransLyrics());
+        boolean hasCurrent = current != null && !current.isBlank();
+        boolean hasTranslated = translated != null && !translated.isBlank();
+        if (!hasCurrent && !hasTranslated) {
+            return state;
+        }
+
+        if (hasCurrent) {
+            state.currentLine = Component.literal(current);
+        }
+        if (hasTranslated) {
+            state.translatedLine = Component.literal(translated);
+            state.y += 0.5F;
+        } else {
+            state.currentLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
+        }
+        return state;
+    }
+
+    @Override
+    public AABB getRenderBoundingBox(ModernTurntableBlockEntity blockEntity) {
+        return new AABB(blockEntity.getBlockPos()).inflate(1.0D, 2.5D, 1.0D);
+    }
+
+    private void submitCenteredText(MutableComponent text, float y, int color, State state, PoseStack poseStack,
+            PortSubmitNodeCollector collector) {
+        FormattedCharSequence visual = text.getVisualOrderText();
+        float x = -font.width(text) / 2.0F;
+        int backgroundColor = ((int) (Minecraft.getInstance().options.getBackgroundOpacity(0.25F) * 255.0F)) << 24;
+        collector.submitText(poseStack, x, y, visual, false, Font.DisplayMode.NORMAL,
+                state.lightCoords, color, backgroundColor, 0);
+    }
+
+    private static String currentLine(Int2ObjectSortedMap<String> lyrics) {
+        if (lyrics == null || lyrics.isEmpty()) {
+            return null;
+        }
+        return lyrics.get(lyrics.firstIntKey());
+    }
+
+    public static class State {
+        public int lightCoords;
+        public MutableComponent currentLine = Component.empty();
+        public MutableComponent translatedLine;
+        public int currentLyricColor = ConfigEvent.PLAYER_ORIGINAL_COLOR;
+        public int transLyricColor = ConfigEvent.PLAYER_TRANSLATED_COLOR;
+        public float y = 0.5F;
+        public boolean projected;
+        public boolean hasDisc;
+        public boolean playing;
+        public Direction facing = Direction.SOUTH;
+        public long gameTime;
+        public float partialTick;
+    }
+
+    private static boolean isLinkedToProjector(ModernTurntableBlockEntity turntable) {
+        return ClientLinkRegistry.isSubtitleProjectionTarget(turntable.getBlockPos());
+    }
+}

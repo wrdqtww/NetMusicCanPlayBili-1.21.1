@@ -1,0 +1,254 @@
+package com.zhongbai233.net_music_can_play_bili.block;
+
+import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import com.mojang.serialization.MapCodec;
+import com.zhongbai233.net_music_can_play_bili.blockentity.ModernTurntableBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.client.ModernTurntableClientHooks;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.EntityBlock;
+import net.minecraft.world.level.block.HorizontalDirectionalBlock;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.SoundType;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityTicker;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockBehaviour;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.VoxelShape;
+
+public class ModernTurntableBlock extends HorizontalDirectionalBlock implements EntityBlock {
+    public static final BooleanProperty HAS_DISC = BooleanProperty.create("has_disc");
+    public static final BooleanProperty PLAYING = BooleanProperty.create("playing");
+    private static final VoxelShape SHAPE = Block.box(1, 0, 1, 15, 8, 15);
+    private static final MapCodec<ModernTurntableBlock> CODEC = simpleCodec(ModernTurntableBlock::new);
+
+    public ModernTurntableBlock(BlockBehaviour.Properties properties) {
+        super(properties.sound(SoundType.WOOD)
+                .strength(1.5F)
+                .noOcclusion());
+        registerDefaultState(stateDefinition.any()
+                .setValue(FACING, Direction.SOUTH)
+                .setValue(HAS_DISC, false)
+                .setValue(PLAYING, false));
+    }
+
+    @Override
+    public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
+        return new ModernTurntableBlockEntity(pos, state);
+    }
+
+    @Override
+    public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state,
+            BlockEntityType<T> type) {
+        if (level.isClientSide() || type != ModBlockEntities.MODERN_TURNTABLE.get()) {
+            return null;
+        }
+        return (tickLevel, pos, tickState, blockEntity) -> ModernTurntableBlockEntity.tick(
+                tickLevel, pos, tickState, (ModernTurntableBlockEntity) blockEntity);
+    }
+
+    @Override
+    protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
+        if (level instanceof ServerLevel serverLevel && (movedByPiston || !state.is(newState.getBlock()))) {
+            AudioLinkIndex.removePlaybackSource(serverLevel, pos);
+        }
+        super.onRemove(state, level, pos, newState, movedByPiston);
+    }
+
+    @Override
+    protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
+            Player player, InteractionHand hand, BlockHitResult hitResult) {
+        if (hand == InteractionHand.OFF_HAND) {
+            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+        }
+        if (player.isShiftKeyDown()) {
+            if (level.isClientSide()) {
+                openClientScreen(pos);
+                return ItemInteractionResult.sidedSuccess(level.isClientSide());
+            }
+            return ItemInteractionResult.sidedSuccess(level.isClientSide());
+        }
+        // 手持链接物品右键 → 存储连接目标到物品 NBT
+        if (stack.getItem() == com.zhongbai233.net_music_can_play_bili.init.ModItems.LYRIC_PROJECTOR.get()) {
+            if (level.isClientSide()) {
+                return ItemInteractionResult.sidedSuccess(level.isClientSide());
+            }
+            LinkHelper.writeLinkToItem(stack, pos);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.lyric_projector.item_linked",
+                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
+            return ItemInteractionResult.sidedSuccess(level.isClientSide());
+        }
+        if (stack.getItem() == com.zhongbai233.net_music_can_play_bili.init.ModItems.VIDEO_PROJECTOR.get()) {
+            if (level.isClientSide()) {
+                return ItemInteractionResult.sidedSuccess(level.isClientSide());
+            }
+            LinkHelper.writeLinkToItem(stack, pos);
+            VideoProjectorBlock.writeLinkedBlockEntityData(stack, pos);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.video_projector.item_linked",
+                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
+            return ItemInteractionResult.sidedSuccess(level.isClientSide());
+        }
+        if (stack.getItem() == com.zhongbai233.net_music_can_play_bili.init.ModItems.SPEAKER.get()) {
+            if (level.isClientSide()) {
+                return ItemInteractionResult.sidedSuccess(level.isClientSide());
+            }
+            LinkHelper.writeLinkToItem(stack, pos);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.speaker.item_linked",
+                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
+            return ItemInteractionResult.sidedSuccess(level.isClientSide());
+        }
+        if (stack.getItem() == com.zhongbai233.net_music_can_play_bili.init.ModItems.CONTROL_CONSOLE.get()) {
+            if (level.isClientSide()) {
+                return ItemInteractionResult.sidedSuccess(level.isClientSide());
+            }
+                LinkHelper.writeControlConsoleLinkToItem(stack, pos, level.dimension().location().toString(),
+                    LinkHelper.ControlConsoleSourceKind.TURNTABLE);
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.control_console.item_linked",
+                    pos.getX(), pos.getY(), pos.getZ()).withStyle(ChatFormatting.GOLD));
+            return ItemInteractionResult.sidedSuccess(level.isClientSide());
+        }
+        if (level.isClientSide()) {
+            return ItemInteractionResult.sidedSuccess(level.isClientSide());
+        }
+        if (!(level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable)
+                || !(player instanceof ServerPlayer serverPlayer)) {
+            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+        }
+
+        if (turntable.hasDisc()) {
+            ejectDisc(level, pos, turntable);
+            return ItemInteractionResult.sidedSuccess(level.isClientSide());
+        }
+
+        ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(stack);
+        if (songInfo == null) {
+            player.sendSystemMessage(Component.translatable(
+                    "message.net_music_can_play_bili.modern_turntable.need_cd").withStyle(ChatFormatting.RED));
+            return ItemInteractionResult.FAIL;
+        }
+
+        turntable.setDisc(stack.copyWithCount(1));
+        if (!player.isCreative()) {
+            stack.shrink(1);
+        }
+        updateState(level, pos, turntable);
+        turntable.startFromDisc(serverPlayer);
+        return ItemInteractionResult.sidedSuccess(level.isClientSide());
+    }
+
+    @Override
+    protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
+            BlockHitResult hitResult) {
+        if (player.isShiftKeyDown()) {
+            if (level.isClientSide()) {
+                openClientScreen(pos);
+                return InteractionResult.SUCCESS;
+            }
+            return InteractionResult.SUCCESS;
+        }
+        return InteractionResult.PASS;
+    }
+
+    @Override
+    protected boolean hasAnalogOutputSignal(BlockState state) {
+        return true;
+    }
+
+    @Override
+    protected int getAnalogOutputSignal(BlockState state, Level level, BlockPos pos) {
+        return level.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable
+                ? turntable.getComparatorOutput()
+                : 0;
+    }
+
+    private static void openClientScreen(BlockPos pos) {
+        ModernTurntableClientHooks.openModernTurntableScreen(pos);
+    }
+
+    @Override
+    public void playerDestroy(Level level, Player player, BlockPos pos, BlockState state, BlockEntity blockEntity,
+            ItemStack tool) {
+        if (!level.isClientSide() && blockEntity instanceof ModernTurntableBlockEntity turntable
+                && turntable.hasDisc()) {
+            popResource(level, pos, turntable.removeDiscForBlockRemoval());
+        }
+        super.playerDestroy(level, player, pos, state, blockEntity, tool);
+    }
+
+    @Override
+    public void destroy(LevelAccessor level, BlockPos pos, BlockState state) {
+        if (level instanceof Level realLevel && !realLevel.isClientSide()
+                && realLevel.getBlockEntity(pos) instanceof ModernTurntableBlockEntity turntable) {
+            turntable.stopPlaybackForBlockRemoval();
+        }
+        super.destroy(level, pos, state);
+    }
+
+    private static void ejectDisc(Level level, BlockPos pos, ModernTurntableBlockEntity turntable) {
+        ItemStack removed = turntable.removeDisc();
+        if (!removed.isEmpty()) {
+            popResource(level, pos, removed);
+        }
+        updateState(level, pos, turntable);
+    }
+
+    private static void updateState(Level level, BlockPos pos, ModernTurntableBlockEntity turntable) {
+        BlockState state = level.getBlockState(pos);
+        if (state.getBlock() instanceof ModernTurntableBlock) {
+            level.setBlock(pos, state
+                    .setValue(HAS_DISC, turntable.hasDisc())
+                    .setValue(PLAYING, turntable.isPlaying()), 3);
+        }
+    }
+
+    @Override
+    public BlockState getStateForPlacement(BlockPlaceContext context) {
+        return defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
+    }
+
+    @Override
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+        builder.add(FACING, HAS_DISC, PLAYING);
+    }
+
+    @Override
+    public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+        return SHAPE;
+    }
+
+    @Override
+    public RenderShape getRenderShape(BlockState state) {
+        return RenderShape.MODEL;
+    }
+
+    @Override
+    protected MapCodec<? extends HorizontalDirectionalBlock> codec() {
+        return CODEC;
+    }
+}

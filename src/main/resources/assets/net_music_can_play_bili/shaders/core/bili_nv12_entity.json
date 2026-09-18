@@ -1,0 +1,9 @@
+{
+    "vertex": "net_music_can_play_bili:bili_video_entity",
+    "fragment": "net_music_can_play_bili:nv12_entity",
+    "samplers": [
+        { "name": "Sampler0" },
+        { "name": "Sampler1" },
+        { "name": "Sampler2" }
+    ]
+}

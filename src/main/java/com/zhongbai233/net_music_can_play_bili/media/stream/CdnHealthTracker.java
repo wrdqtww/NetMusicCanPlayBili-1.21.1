@@ -1,0 +1,183 @@
+package com.zhongbai233.net_music_can_play_bili.media.stream;
+
+import com.zhongbai233.net_music_can_play_bili.util.NcpbSystemProperties;
+
+import java.net.URL;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * 轻量 CDN 健康评分器。
+ *
+ * <p>
+ * 只在客户端进程内维护近期状态：成功会逐步降低惩罚，失败/空包/短读会增加惩罚，
+ * 候选 CDN 排序时优先选择低惩罚、近期成功、延迟更低的 host。
+ * </p>
+ */
+public final class CdnHealthTracker {
+    private static final boolean ENABLED = NcpbSystemProperties.booleanValue(
+            "ncpb.bili.cdn_health.enabled", true);
+    private static final long STALE_AFTER_MILLIS = Math.max(10_000L, NcpbSystemProperties.longValue(
+            "ncpb.bili.cdn_health.stale_after_ms", "bili.cdn_health.stale_after_ms", 10L * 60L * 1000L));
+    private static final long FORBIDDEN_COOLDOWN_MILLIS = Math.max(1_000L, NcpbSystemProperties.longValue(
+            "ncpb.bili.cdn_health.forbidden_cooldown_ms", "bili.cdn_health.forbidden_cooldown_ms", 60_000L));
+    private static final double SUCCESS_DECAY = clamp01(NcpbSystemProperties.doubleValue(
+            "ncpb.bili.cdn_health.success_decay", "bili.cdn_health.success_decay", 0.72D));
+    private static final double FAILURE_PENALTY = Math.max(0.0D,
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.failure_penalty",
+                    "bili.cdn_health.failure_penalty", 4.0D));
+    private static final double EMPTY_PENALTY = Math.max(0.0D,
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.empty_penalty",
+                    "bili.cdn_health.empty_penalty", 6.0D));
+    private static final double SHORT_READ_PENALTY = Math.max(0.0D,
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.short_read_penalty",
+                    "bili.cdn_health.short_read_penalty", 3.0D));
+    private static final double HTTP_RETRYABLE_PENALTY = Math.max(0.0D,
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.http_retryable_penalty",
+                    "bili.cdn_health.http_retryable_penalty", 5.0D));
+    private static final double MAX_PENALTY = Math.max(1.0D,
+            NcpbSystemProperties.doubleValue("ncpb.bili.cdn_health.max_penalty",
+                    "bili.cdn_health.max_penalty", 64.0D));
+    private static final double UNKNOWN_HOST_SCORE = 2.5D;
+
+    private static final ConcurrentHashMap<String, HostHealth> HEALTH_BY_HOST = new ConcurrentHashMap<>();
+
+    private CdnHealthTracker() {
+    }
+
+    public static void recordSuccess(URL url, long elapsedMillis, long bytes) {
+        if (!ENABLED) {
+            return;
+        }
+        String host = host(url);
+        if (host == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        HEALTH_BY_HOST.compute(host, (ignored, existing) -> {
+            HostHealth health = existing != null ? existing.fresh(now) : HostHealth.initial(now);
+            double latency = elapsedMillis > 0L ? elapsedMillis : health.latencyMillis();
+            double ewmaLatency = health.latencyMillis() <= 0.0D
+                    ? latency
+                    : health.latencyMillis() * 0.8D + latency * 0.2D;
+            double penalty = Math.max(0.0D, health.penalty() * SUCCESS_DECAY - 0.25D);
+            return new HostHealth(penalty, ewmaLatency, health.successes() + 1, health.failures(), now,
+                    health.cooldownUntilMillis() <= now ? 0L : health.cooldownUntilMillis());
+        });
+    }
+
+    public static void recordFailure(URL url, FailureKind kind) {
+        if (!ENABLED) {
+            return;
+        }
+        String host = host(url);
+        if (host == null) {
+            return;
+        }
+        double delta = switch (kind) {
+            case EMPTY -> EMPTY_PENALTY;
+            case SHORT_READ -> SHORT_READ_PENALTY;
+            case HTTP_FORBIDDEN -> HTTP_RETRYABLE_PENALTY * 2.0D;
+            case HTTP_RETRYABLE -> HTTP_RETRYABLE_PENALTY;
+            case IO -> FAILURE_PENALTY;
+        };
+        long now = System.currentTimeMillis();
+        HEALTH_BY_HOST.compute(host, (ignored, existing) -> {
+            HostHealth health = existing != null ? existing.fresh(now) : HostHealth.initial(now);
+            double penalty = Math.min(MAX_PENALTY, health.penalty() + delta);
+            long cooldownUntil = kind == FailureKind.HTTP_FORBIDDEN
+                    ? now + FORBIDDEN_COOLDOWN_MILLIS
+                    : health.cooldownUntilMillis();
+            return new HostHealth(penalty, health.latencyMillis(), health.successes(), health.failures() + 1, now,
+                    cooldownUntil);
+        });
+    }
+
+    public static boolean isCoolingDown(URL url) {
+        if (!ENABLED) {
+            return false;
+        }
+        String host = host(url);
+        HostHealth health = host != null ? HEALTH_BY_HOST.get(host) : null;
+        return health != null && health.cooldownUntilMillis() > System.currentTimeMillis();
+    }
+
+    public static long cooldownUntilMillis(URL url) {
+        if (!ENABLED) {
+            return 0L;
+        }
+        String host = host(url);
+        HostHealth health = host != null ? HEALTH_BY_HOST.get(host) : null;
+        return health != null ? health.cooldownUntilMillis() : 0L;
+    }
+
+    public static double score(URL url) {
+        if (!ENABLED) {
+            return 0.0D;
+        }
+        String host = host(url);
+        if (host == null) {
+            return 0.0D;
+        }
+        HostHealth health = HEALTH_BY_HOST.get(host);
+        if (health == null) {
+            // 未观测 host 不能排在刚刚成功的低延迟 host 前面；否则 CDN race 的赢家会在下一段媒体
+            // Range 请求中立刻被原始未知 host 抢回首位。
+            return UNKNOWN_HOST_SCORE;
+        }
+        long age = Math.max(0L, System.currentTimeMillis() - health.updatedAtMillis());
+        return ageAdjustedScore(health.penalty(), health.latencyMillis(), age, STALE_AFTER_MILLIS);
+    }
+
+    static double ageAdjustedScore(double penalty, double latencyMillis, long ageMillis, long staleAfterMillis) {
+        long safeStaleAfter = Math.max(1L, staleAfterMillis);
+        double freshness = ageMillis >= safeStaleAfter
+                ? 0.0D
+                : 1.0D - Math.max(0L, ageMillis) / (double) safeStaleAfter;
+        double latencyPenalty = latencyMillis > 0.0D ? Math.min(8.0D, latencyMillis / 750.0D) : 0.0D;
+        double observedScore = Math.max(0.0D, penalty) + latencyPenalty;
+        // Aged observations converge to the neutral unknown-host score. Converging to zero would
+        // make a stale failed host look better than both an unknown host and a recent winner.
+        return UNKNOWN_HOST_SCORE + (observedScore - UNKNOWN_HOST_SCORE) * freshness;
+    }
+
+    public static void clear() {
+        HEALTH_BY_HOST.clear();
+    }
+
+    private static String host(URL url) {
+        String host = url != null ? url.getHost() : null;
+        return host == null || host.isBlank() ? null : host.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static double clamp01(double value) {
+        if (!Double.isFinite(value)) {
+            return 0.72D;
+        }
+        return Math.max(0.0D, Math.min(1.0D, value));
+    }
+
+    public enum FailureKind {
+        IO,
+        EMPTY,
+        SHORT_READ,
+        HTTP_FORBIDDEN,
+        HTTP_RETRYABLE
+    }
+
+    private record HostHealth(double penalty, double latencyMillis, long successes, long failures,
+            long updatedAtMillis, long cooldownUntilMillis) {
+        static HostHealth initial(long now) {
+            return new HostHealth(0.0D, 0.0D, 0L, 0L, now, 0L);
+        }
+
+        HostHealth fresh(long now) {
+            long age = Math.max(0L, now - updatedAtMillis);
+            if (age <= 0L) {
+                return this;
+            }
+            double staleRatio = Math.min(1.0D, age / (double) STALE_AFTER_MILLIS);
+            return new HostHealth(penalty * (1.0D - staleRatio * 0.5D), latencyMillis, successes, failures,
+                    updatedAtMillis, cooldownUntilMillis);
+        }
+    }
+}

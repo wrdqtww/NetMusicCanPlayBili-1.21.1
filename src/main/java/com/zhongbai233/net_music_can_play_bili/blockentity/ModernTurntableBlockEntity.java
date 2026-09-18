@@ -1,0 +1,1037 @@
+package com.zhongbai233.net_music_can_play_bili.blockentity;
+
+import com.github.tartaricacid.netmusic.api.lyric.LyricRecord;
+import com.github.tartaricacid.netmusic.api.resolver.MusicPlayResolverManager;
+import com.github.tartaricacid.netmusic.item.ItemMusicCD;
+import com.mojang.logging.LogUtils;
+import com.zhongbai233.net_music_can_play_bili.bili.BiliSongInfoSanitizer;
+import com.zhongbai233.net_music_can_play_bili.media.sync.MonotonicMediaClock;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSync;
+import com.zhongbai233.net_music_can_play_bili.media.sync.ResolveGeneration;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSessionId;
+import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
+import com.zhongbai233.net_music_can_play_bili.block.ModernTurntableBlock;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.network.ModernTurntableStopPacket;
+import com.zhongbai233.net_music_can_play_bili.link.AudioLinkIndex;
+import com.zhongbai233.net_music_can_play_bili.link.AudioPlaybackIndexSavedData;
+import com.zhongbai233.net_music_can_play_bili.server.PlaybackAuditManager;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.items.ItemStackHandler;
+import net.neoforged.neoforge.network.PacketDistributor;
+import net.minecraft.world.phys.AABB;
+import org.slf4j.Logger;
+
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.WeakHashMap;
+
+import static com.zhongbai233.net_music_can_play_bili.link.LinkHelper.getBooleanOr;
+import static com.zhongbai233.net_music_can_play_bili.link.LinkHelper.getIntOr;
+import static com.zhongbai233.net_music_can_play_bili.link.LinkHelper.getLongOr;
+import static com.zhongbai233.net_music_can_play_bili.link.LinkHelper.getStringOr;
+
+public class ModernTurntableBlockEntity extends BlockEntity implements PlaybackAudioSource {
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final String DISC_TAG = "Disc";
+    private static final String PLAYING_TAG = "Playing";
+    private static final String RAW_URL_TAG = "RawUrl";
+    private static final String PLAY_URL_TAG = "PlayUrl";
+    private static final String SONG_NAME_TAG = "SongName";
+    private static final String DURATION_TAG = "DurationSeconds";
+    private static final String STARTED_TIME_TAG = "StartedGameTime";
+    private static final String ELAPSED_SECONDS_TAG = "ElapsedSeconds";
+    private static final String ELAPSED_TICKS_TAG = "ElapsedTicks";
+    private static final String SEEK_GENERATION_TAG = "SeekGeneration";
+    private static final String OWNER_TAG = "PlaybackOwner";
+    private static final String REPEAT_ONE_TAG = "RepeatOne";
+    private static final String REDSTONE_MODE_TAG = "RedstoneMode";
+    private static final String EXTRACTION_MODE_TAG = "ExtractionMode";
+    private static final String PLAYBACK_COMPLETED_TAG = "PlaybackCompleted";
+    private static final String VOLUME_PER_MILLE_TAG = "VolumePerMille";
+    private static final String SOURCE_ID_TAG = "PlaybackSourceId";
+    private static final int SYNC_RANGE = AudioPlaybackRange.SYNC_DISTANCE_BLOCKS;
+    private static final int SYNC_INTERVAL_TICKS = 20;
+    private static final Set<ModernTurntableBlockEntity> LOADED_SERVER_TURNTABLES = Collections.synchronizedSet(
+            Collections.newSetFromMap(new WeakHashMap<>()));
+
+    private final Set<UUID> syncedPlayers = new HashSet<>();
+
+    private ItemStack disc = ItemStack.EMPTY;
+    private boolean playing;
+    private String rawUrl = "";
+    private String playUrl = "";
+    private String songName = "";
+    private int durationSeconds;
+    private long startedGameTime;
+    private transient MonotonicMediaClock.Anchor playbackClock = MonotonicMediaClock.paused(0L);
+    private int savedElapsedSeconds;
+    private long savedElapsedTicks;
+    private int seekGeneration;
+    private boolean needsResolveOnLoad;
+    private boolean pendingAutomaticStart;
+    private boolean resolvingPlayback;
+    private ResolveGeneration playbackIntentGeneration = ResolveGeneration.initial();
+    private boolean redstonePowered;
+    private boolean redstoneStateInitialized;
+    private boolean pulsePlaybackRequested;
+    private int lastComparatorOutput = -1;
+    private UUID playbackOwnerId;
+    private boolean repeatOne;
+    private TurntableRedstoneMode redstoneMode = TurntableRedstoneMode.IGNORE;
+    private TurntableExtractionMode extractionMode = TurntableExtractionMode.AFTER_PLAYBACK;
+    private boolean playbackCompleted;
+    private int volumePerMille = 1000;
+    private UUID playbackSourceId = UUID.randomUUID();
+    private transient LyricRecord clientLyricRecord;
+    private transient String clientLyricSessionId = "";
+    private transient int clientLyricTick = -1;
+
+    public ModernTurntableBlockEntity(BlockPos pos, BlockState blockState) {
+        super(ModBlockEntities.MODERN_TURNTABLE.get(), pos, blockState);
+    }
+
+    public PlaybackSourceId getPlaybackSourceId() {
+        return PlaybackSourceId.of(playbackSourceId);
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (level instanceof ServerLevel) {
+            LOADED_SERVER_TURNTABLES.add(this);
+            AudioLinkIndex.registerPlaybackSource((ServerLevel) level, worldPosition, getPlaybackSourceId(),
+                    AudioPlaybackIndexSavedData.SourceKind.TURNTABLE);
+        }
+    }
+
+    @Override
+    public void setRemoved() {
+        invalidatePlaybackIntent();
+        super.setRemoved();
+        LOADED_SERVER_TURNTABLES.remove(this);
+        syncedPlayers.clear();
+        clientLyricRecord = null;
+        clientLyricSessionId = "";
+        clientLyricTick = -1;
+    }
+
+    private final ItemStackHandler itemHandler = new ModernTurntableDiscHandler(
+            () -> disc,
+            stack -> disc = stack.isEmpty()
+                    ? ItemStack.EMPTY
+                    : BiliSongInfoSanitizer.sanitizeDisc(stack.copyWithCount(1)),
+            this::canAutomationExtract,
+            this::onDiscHandlerCommit);
+
+    private void onDiscHandlerCommit(ItemStack originalStack) {
+        boolean hadDisc = !originalStack.isEmpty();
+        if (hadDisc && disc.isEmpty()) {
+            pendingAutomaticStart = false;
+            stopPlayback();
+        } else if (!hadDisc && !disc.isEmpty()) {
+            playbackCompleted = false;
+            pendingAutomaticStart = true;
+        }
+        markDirty();
+    }
+
+    public ItemStackHandler getItemHandler() {
+        return itemHandler;
+    }
+
+    public static void tick(Level level, BlockPos pos, BlockState state, ModernTurntableBlockEntity turntable) {
+        if (!(level instanceof ServerLevel serverLevel)) {
+            return;
+        }
+        turntable.pollRedstoneSignal(serverLevel);
+        if (turntable.pendingAutomaticStart && turntable.hasDisc() && !turntable.playing
+                && !turntable.resolvingPlayback) {
+            turntable.pendingAutomaticStart = false;
+            if (turntable.redstoneMode != TurntableRedstoneMode.PULSE_TOGGLE
+                    && turntable.redstoneMode.shouldPlay(turntable.redstonePowered)) {
+                turntable.startFromDisc();
+            }
+        }
+        // 世界加载后需要重新解析 B站 CDN 直链（旧 URL 可能已过期）
+        if (turntable.needsResolveOnLoad && turntable.playing && !turntable.rawUrl.isBlank()) {
+            turntable.needsResolveOnLoad = false;
+            turntable.resolveAndResume(serverLevel);
+            return;
+        }
+        if (!turntable.playing) {
+            turntable.updateComparatorOutput();
+            return;
+        }
+        int remaining = turntable.remainingSeconds();
+        if (remaining <= 0) {
+            if (turntable.repeatOne && turntable.hasPlaybackData()) {
+                turntable.restartForRepeat(serverLevel);
+            } else {
+                turntable.playbackCompleted = true;
+                turntable.pulsePlaybackRequested = false;
+                turntable.stopPlayback();
+            }
+            return;
+        }
+        if (serverLevel.getServer().getTickCount() % SYNC_INTERVAL_TICKS == 0) {
+            turntable.syncNearbyPlayers(serverLevel, remaining);
+        }
+        turntable.updateComparatorOutput();
+        turntable.recordAudit(serverLevel);
+    }
+
+    private void resolveAndResume(ServerLevel serverLevel) {
+        if (!isPlaybackAllowed(serverLevel, rawUrl, null)) {
+            stopPlayback();
+            return;
+        }
+        long elapsedTicks = snapshotElapsedTicks();
+        if (!(rawUrl.startsWith("BV") || rawUrl.startsWith("bv") || rawUrl.startsWith("av") || rawUrl.startsWith("AV"))
+                || !rawUrl.contains("|p=")) {
+            // 非 B站 存储选集的 URL：尝试直接用保存的 URL 恢复
+            if (!redstoneAllowsPlayback(serverLevel)) {
+                resolvingPlayback = false;
+                return;
+            }
+            playing = true;
+            resolvingPlayback = false;
+            startedGameTime = MonotonicMediaClock.nowTick();
+            playbackClock = MonotonicMediaClock.running(elapsedTicks * 50L, MonotonicMediaClock.nowNanos());
+            syncedPlayers.clear();
+            markDirty();
+            syncNearbyPlayers(serverLevel, remainingSeconds());
+            return;
+        }
+        String requestedRawUrl = rawUrl;
+        ResolveGeneration capturedGeneration = beginPlaybackIntent();
+        // B站 存储选集的 URL：重新解析 CDN 直链
+        playing = false;
+        syncedPlayers.clear();
+        markDirty();
+        @SuppressWarnings("null")
+        ItemMusicCD.SongInfo resumeInfo = new ItemMusicCD.SongInfo(requestedRawUrl, songName, durationSeconds, false);
+        MusicPlayResolverManager.resolve(resumeInfo)
+                .whenCompleteAsync((resolved, error) -> {
+                    if (!acceptsPlaybackResult(serverLevel, capturedGeneration, rawUrl, requestedRawUrl)) {
+                        return;
+                    }
+                    resolvingPlayback = false;
+                    if (error != null) {
+                        LOGGER.error("现代化唱片机恢复播放 B站 解析失败: {}", songName, error);
+                        return;
+                    }
+                    String newUrl = playbackUrlForStorage(requestedRawUrl,
+                            resolved.songUrl != null ? resolved.songUrl : playUrl);
+                    if (!newUrl.isBlank() && redstoneAllowsPlayback(serverLevel)) {
+                        playUrl = newUrl;
+                        playing = true;
+                        startedGameTime = MonotonicMediaClock.nowTick();
+                        playbackClock = MonotonicMediaClock.running(elapsedTicks * 50L, MonotonicMediaClock.nowNanos());
+                        durationSeconds = Math.max(1, resolved.songTime > 0 ? resolved.songTime : durationSeconds);
+                        syncedPlayers.clear();
+                        markDirty();
+                        syncNearbyPlayers(serverLevel, remainingSeconds());
+                    }
+                }, serverLevel.getServer());
+    }
+
+    public boolean hasDisc() {
+        return !disc.isEmpty();
+    }
+
+    public ItemStack getDisc() {
+        return disc;
+    }
+
+    public boolean isPlaying() {
+        return playing;
+    }
+
+    public boolean isRepeatOne() {
+        return repeatOne;
+    }
+
+    public TurntableRedstoneMode getRedstoneMode() {
+        return redstoneMode;
+    }
+
+    public TurntableExtractionMode getExtractionMode() {
+        return extractionMode;
+    }
+
+    public float getVolume() {
+        return volumePerMille / 1000.0F;
+    }
+
+    public int getVolumePerMille() {
+        return volumePerMille;
+    }
+
+    public String getSongName() {
+        return songName;
+    }
+
+    public String getRawUrl() {
+        return rawUrl;
+    }
+
+    public int getDurationSeconds() {
+        return durationSeconds;
+    }
+
+    public boolean hasPlaybackData() {
+        return durationSeconds > 0 && (!playUrl.isBlank() || !rawUrl.isBlank());
+    }
+
+    public int getComparatorOutput() {
+        if (!hasDisc() || durationSeconds <= 0 || level == null) {
+            return 0;
+        }
+        long elapsedMillis = getPlaybackElapsedMillis();
+        long durationMillis = Math.max(1L, durationSeconds * 1000L);
+        return TurntableComparatorSignal.fromProgress(true, elapsedMillis, durationMillis);
+    }
+
+    public LyricRecord getClientLyricRecord() {
+        return clientLyricRecord;
+    }
+
+    public int getClientLyricTick() {
+        return clientLyricTick;
+    }
+
+    public void setClientLyricRecord(LyricRecord lyricRecord, String sessionId) {
+        setClientLyricRecord(lyricRecord, sessionId, -1);
+    }
+
+    public void setClientLyricRecord(LyricRecord lyricRecord, String sessionId, int lyricTick) {
+        if (level != null && !level.isClientSide()) {
+            return;
+        }
+        clientLyricRecord = lyricRecord;
+        clientLyricSessionId = normalizeSessionId(sessionId);
+        clientLyricTick = lyricTick;
+    }
+
+    public void clearClientLyricRecord(String sessionId) {
+        if (level != null && !level.isClientSide()) {
+            return;
+        }
+        String normalized = normalizeSessionId(sessionId);
+        if (normalized.isBlank() || clientLyricSessionId.isBlank() || clientLyricSessionId.equals(normalized)) {
+            clientLyricRecord = null;
+            clientLyricSessionId = "";
+            clientLyricTick = -1;
+        }
+    }
+
+    public long getPlaybackElapsedMillis() {
+        return playbackClock.elapsedMillis(MonotonicMediaClock.nowNanos(), Math.max(0L, durationSeconds * 1000L));
+    }
+
+    public PlaybackSync.Metadata getPlaybackSyncMetadata() {
+        if (!playing || playUrl.isBlank()) {
+            return new PlaybackSync.Metadata("", 0L, 0L);
+        }
+        return new PlaybackSync.Metadata(playbackSessionId(), elapsedMillis(), durationSeconds * 1000L);
+    }
+
+    public void setDisc(ItemStack stack) {
+        disc = stack.isEmpty() ? ItemStack.EMPTY : BiliSongInfoSanitizer.sanitizeDisc(stack);
+        playbackCompleted = false;
+        pendingAutomaticStart = false;
+        resolvingPlayback = false;
+        stopPlayback();
+        markDirty();
+    }
+
+    public ItemStack removeDisc() {
+        ItemStack removed = disc;
+        disc = ItemStack.EMPTY;
+        pendingAutomaticStart = false;
+        resolvingPlayback = false;
+        stopPlayback();
+        markDirty();
+        return removed;
+    }
+
+    public ItemStack removeDiscForBlockRemoval() {
+        ItemStack removed = disc;
+        disc = ItemStack.EMPTY;
+        stopPlaybackWithoutBlockUpdate();
+        setChanged();
+        return removed;
+    }
+
+    public void stopPlaybackForBlockRemoval() {
+        stopPlaybackWithoutBlockUpdate();
+        setChanged();
+    }
+
+    public void startFromDisc(ServerPlayer triggerPlayer) {
+        startFromDiscInternal(triggerPlayer);
+    }
+
+    public void startFromDisc() {
+        startFromDiscInternal(null);
+    }
+
+    private void startFromDiscInternal(ServerPlayer triggerPlayer) {
+        if (!(level instanceof ServerLevel serverLevel) || disc.isEmpty()) {
+            return;
+        }
+        pendingAutomaticStart = false;
+        playbackCompleted = false;
+        if (!redstoneAllowsPlayback(serverLevel)) {
+            return;
+        }
+
+        @SuppressWarnings("null")
+        ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(disc);
+        if (songInfo == null) {
+            if (triggerPlayer != null) {
+                triggerPlayer.sendSystemMessage(Component.translatable(
+                        "message.net_music_can_play_bili.modern_turntable.need_cd"));
+            }
+            return;
+        }
+        if (songInfo.vip && !MusicPlayResolverManager.canResolve(songInfo)) {
+            if (triggerPlayer != null) {
+                triggerPlayer.sendSystemMessage(Component.translatable(
+                        "message.net_music_can_play_bili.modern_turntable.need_vip"));
+            }
+            return;
+        }
+        if (!isPlaybackAllowed(serverLevel, songInfo.songUrl, triggerPlayer)) {
+            return;
+        }
+
+        ItemMusicCD.SongInfo original = songInfo.clone();
+        playbackOwnerId = triggerPlayer != null ? triggerPlayer.getUUID() : null;
+        ResolveGeneration capturedGeneration = beginPlaybackIntent();
+        MusicPlayResolverManager.resolve(original.clone())
+                .whenCompleteAsync((resolved, error) -> {
+                    if (!acceptsPlaybackResult(serverLevel, capturedGeneration, currentDiscUrl(), original.songUrl)) {
+                        return;
+                    }
+                    resolvingPlayback = false;
+                    if (error != null) {
+                        LOGGER.error("现代化唱片机解析播放失败: {}", original.songName, error);
+                        return;
+                    }
+                    applyResolvedPlayback(serverLevel, original, resolved);
+                }, serverLevel.getServer());
+    }
+
+    private void applyResolvedPlayback(ServerLevel serverLevel, ItemMusicCD.SongInfo original,
+            ItemMusicCD.SongInfo resolved) {
+        @SuppressWarnings("null")
+        ItemMusicCD.SongInfo current = ItemMusicCD.getSongInfo(disc);
+        if (current == null || !Objects.equals(current.songUrl, original.songUrl)) {
+            return;
+        }
+        if (!isPlaybackAllowed(serverLevel, original.songUrl, null)) {
+            stopPlayback();
+            return;
+        }
+        if (!redstoneAllowsPlayback(serverLevel)) {
+            return;
+        }
+
+        rawUrl = original.songUrl != null ? original.songUrl : "";
+        playUrl = playbackUrlForStorage(rawUrl, resolved.songUrl != null ? resolved.songUrl : rawUrl);
+        songName = resolved.songName != null && !resolved.songName.isBlank()
+                ? resolved.songName
+                : original.songName;
+        durationSeconds = Math.max(1, resolved.songTime);
+        startedGameTime = MonotonicMediaClock.nowTick();
+        playbackClock = MonotonicMediaClock.running(0L, MonotonicMediaClock.nowNanos());
+        savedElapsedSeconds = 0;
+        savedElapsedTicks = 0L;
+        seekGeneration = 0;
+        playing = true;
+        syncedPlayers.clear();
+        markDirty();
+        syncNearbyPlayers(serverLevel, durationSeconds);
+    }
+
+    private void pollRedstoneSignal(ServerLevel serverLevel) {
+        boolean powered = serverLevel.hasNeighborSignal(worldPosition);
+        boolean stateChanged = !redstoneStateInitialized || powered != redstonePowered;
+        boolean risingEdge = redstoneStateInitialized && powered && !redstonePowered;
+        redstonePowered = powered;
+        redstoneStateInitialized = true;
+        if (redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE) {
+            if (risingEdge) {
+                togglePlaybackFromPulse(serverLevel);
+            }
+        } else if (stateChanged) {
+            applyRedstoneMode(serverLevel);
+        }
+        if (lastComparatorOutput < 0) {
+            lastComparatorOutput = getComparatorOutput();
+        }
+    }
+
+    private void applyRedstoneMode(ServerLevel serverLevel) {
+        if (!redstoneStateInitialized || redstoneMode == TurntableRedstoneMode.IGNORE
+                || redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE || !hasDisc()) {
+            return;
+        }
+        if (redstoneMode.shouldPlay(redstonePowered)) {
+            if (!playing && !resolvingPlayback) {
+                if (hasPlaybackData()) {
+                    resumePlaybackAutomatically(serverLevel);
+                } else {
+                    startFromDisc();
+                }
+            }
+        } else if (playing) {
+            pausePlayback(serverLevel);
+        }
+    }
+
+    public void cycleRedstoneMode(ServerLevel serverLevel) {
+        redstoneMode = redstoneMode.next();
+        redstonePowered = serverLevel.hasNeighborSignal(worldPosition);
+        redstoneStateInitialized = true;
+        pulsePlaybackRequested = redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE && playing;
+        if (redstoneMode == TurntableRedstoneMode.IGNORE) {
+            if (hasDisc() && !playing && !resolvingPlayback) {
+                if (hasPlaybackData()) {
+                    resumePlaybackAutomatically(serverLevel);
+                } else {
+                    startFromDisc();
+                }
+            }
+        } else {
+            applyRedstoneMode(serverLevel);
+        }
+        markDirty();
+    }
+
+    public void cycleExtractionMode() {
+        extractionMode = extractionMode.next();
+        markDirty();
+    }
+
+    public void setVolumePerMille(int value) {
+        int nextVolume = ModernTurntableVolumePolicy.clamp(value);
+        ModernTurntableVolumePolicy.Action action = ModernTurntableVolumePolicy.decide(
+                volumePerMille, nextVolume, playing);
+        if (action == ModernTurntableVolumePolicy.Action.NONE) {
+            return;
+        }
+        volumePerMille = nextVolume;
+        markDirty();
+    }
+
+    private boolean canAutomationExtract() {
+        return extractionMode == TurntableExtractionMode.ALWAYS || playbackCompleted;
+    }
+
+    private void togglePlaybackFromPulse(ServerLevel serverLevel) {
+        if (!hasDisc()) {
+            pulsePlaybackRequested = false;
+            return;
+        }
+        pulsePlaybackRequested = !pulsePlaybackRequested;
+        if (!pulsePlaybackRequested) {
+            if (playing) {
+                pausePlayback(serverLevel);
+            }
+            return;
+        }
+        if (playing || resolvingPlayback) {
+            return;
+        }
+        if (hasPlaybackData()) {
+            resumePlaybackAutomatically(serverLevel);
+        } else {
+            startFromDisc();
+        }
+    }
+
+    public void pauseFromControl(ServerLevel serverLevel) {
+        if (redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE) {
+            pulsePlaybackRequested = false;
+            pausePlayback(serverLevel);
+        } else if (redstoneMode == TurntableRedstoneMode.IGNORE || !redstoneAllowsPlayback(serverLevel)) {
+            pausePlayback(serverLevel);
+        }
+    }
+
+    private boolean redstoneAllowsPlayback(ServerLevel serverLevel) {
+        return redstoneMode == TurntableRedstoneMode.IGNORE
+                || (redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE
+                        ? pulsePlaybackRequested
+                        : redstoneMode.shouldPlay(serverLevel.hasNeighborSignal(worldPosition)));
+    }
+
+    private void resumePlaybackAutomatically(ServerLevel serverLevel) {
+        if (!isPlaybackAllowed(serverLevel, rawUrl, null)) {
+            return;
+        }
+        long elapsedTicks = saveElapsedTicks(storedElapsedTicks());
+        if (isStoredBiliSelection(rawUrl)) {
+            resolvingPlayback = true;
+            resolveAndResume(serverLevel);
+        } else {
+            playing = true;
+            startedGameTime = MonotonicMediaClock.nowTick();
+            playbackClock = MonotonicMediaClock.running(elapsedTicks * 50L, MonotonicMediaClock.nowNanos());
+            syncedPlayers.clear();
+            markDirty();
+            syncNearbyPlayers(serverLevel, remainingSeconds());
+        }
+    }
+
+    private void updateComparatorOutput() {
+        if (level == null || level.isClientSide()) {
+            return;
+        }
+        int output = getComparatorOutput();
+        if (output != lastComparatorOutput) {
+            lastComparatorOutput = output;
+            level.updateNeighbourForOutputSignal(worldPosition, getBlockState().getBlock());
+        }
+    }
+
+    private static String playbackUrlForStorage(String rawUrl, String resolvedUrl) {
+        return isStoredBiliSelection(rawUrl) ? rawUrl : (resolvedUrl != null ? resolvedUrl : "");
+    }
+
+    public void stopPlayback() {
+        if (level instanceof ServerLevel serverLevel) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
+        }
+        notifyPlaybackStopped();
+        invalidatePlaybackIntent();
+        if (!playing && playUrl.isBlank()) {
+            resolvingPlayback = false;
+            return;
+        }
+        clearPlaybackState();
+        markDirty();
+    }
+
+    private void stopPlaybackWithoutBlockUpdate() {
+        if (level instanceof ServerLevel serverLevel) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
+        }
+        notifyPlaybackStopped();
+        invalidatePlaybackIntent();
+        clearPlaybackState();
+    }
+
+    private void notifyPlaybackStopped() {
+        if (!(level instanceof ServerLevel serverLevel) || !playing || playUrl.isBlank()) {
+            return;
+        }
+        PlaybackSessionId stoppedSession = PlaybackSessionId.parse(playbackSessionId()).orElse(null);
+        if (stoppedSession == null) {
+            return;
+        }
+        ModernTurntableStopPacket packet = new ModernTurntableStopPacket(worldPosition, stoppedSession.value());
+        Set<UUID> recipients = new HashSet<>(syncedPlayers);
+        AABB range = new AABB(worldPosition).inflate(SYNC_RANGE);
+        for (ServerPlayer player : serverLevel.players()) {
+            if (range.contains(player.position())) {
+                recipients.add(player.getUUID());
+            }
+        }
+        for (UUID recipientId : recipients) {
+            ServerPlayer player = serverLevel.getServer().getPlayerList().getPlayer(recipientId);
+            if (player != null && player.level() == serverLevel) {
+                PacketDistributor.sendToPlayer(player, packet);
+            }
+        }
+    }
+
+    private void clearPlaybackState() {
+        playing = false;
+        resolvingPlayback = false;
+        pulsePlaybackRequested = false;
+        rawUrl = "";
+        playUrl = "";
+        songName = "";
+        durationSeconds = 0;
+        startedGameTime = 0L;
+        playbackClock = MonotonicMediaClock.paused(0L);
+        savedElapsedSeconds = 0;
+        savedElapsedTicks = 0L;
+        seekGeneration = 0;
+        syncedPlayers.clear();
+        playbackOwnerId = null;
+    }
+
+    private ResolveGeneration beginPlaybackIntent() {
+        resolvingPlayback = true;
+        playbackIntentGeneration = playbackIntentGeneration.next();
+        return playbackIntentGeneration;
+    }
+
+    private void invalidatePlaybackIntent() {
+        playbackIntentGeneration = playbackIntentGeneration.next();
+        resolvingPlayback = false;
+    }
+
+    private boolean acceptsPlaybackResult(ServerLevel requestedLevel, ResolveGeneration capturedGeneration,
+            String currentSource, String requestedSource) {
+        return TurntableResolveAdmissionPolicy.decide(isRemoved(), level == requestedLevel,
+                playbackIntentGeneration, capturedGeneration, currentSource, requestedSource)
+                == TurntableResolveAdmissionPolicy.Decision.APPLY;
+    }
+
+    private String currentDiscUrl() {
+        @SuppressWarnings("null")
+        ItemMusicCD.SongInfo current = ItemMusicCD.getSongInfo(disc);
+        return current != null ? current.songUrl : null;
+    }
+
+    public void replayFromBeginning(ServerPlayer player) {
+        if (!(level instanceof ServerLevel) || disc.isEmpty()) {
+            return;
+        }
+        notifyPlaybackStopped();
+        if (redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE) {
+            pulsePlaybackRequested = true;
+        }
+        if (!redstoneAllowsPlayback((ServerLevel) level)) {
+            return;
+        }
+        playbackCompleted = false;
+        playing = false;
+        startedGameTime = 0L;
+        playbackClock = MonotonicMediaClock.paused(0L);
+        savedElapsedSeconds = 0;
+        savedElapsedTicks = 0L;
+        syncedPlayers.clear();
+        markDirty();
+        startFromDisc(player);
+    }
+
+    public void toggleRepeatOne() {
+        repeatOne = !repeatOne;
+        markDirty();
+    }
+
+    private void restartForRepeat(ServerLevel serverLevel) {
+        playbackCompleted = false;
+        startedGameTime = MonotonicMediaClock.nowTick();
+        playbackClock = MonotonicMediaClock.running(0L, MonotonicMediaClock.nowNanos());
+        savedElapsedSeconds = 0;
+        savedElapsedTicks = 0L;
+        seekGeneration++;
+        syncedPlayers.clear();
+        markDirty();
+        syncNearbyPlayers(serverLevel, durationSeconds);
+    }
+
+    public void pausePlayback(ServerLevel serverLevel) {
+        if (!playing && !resolvingPlayback) {
+            return;
+        }
+        if (playing) {
+            IndexedBlockPlaybackSessionManager.remove(serverLevel, getPlaybackSourceId());
+            notifyPlaybackStopped();
+            snapshotElapsedTicks();
+        }
+        invalidatePlaybackIntent();
+        playing = false;
+        startedGameTime = 0L;
+        playbackClock = MonotonicMediaClock.paused(storedElapsedTicks() * 50L);
+        syncedPlayers.clear();
+        markDirty();
+    }
+
+    public void resumePlayback(ServerPlayer player) {
+        resumePlayback(player, -1L);
+    }
+
+    public void resumePlayback(ServerPlayer player, long targetMillis) {
+        if (!(level instanceof ServerLevel serverLevel) || playing) {
+            return;
+        }
+        if (redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE) {
+            pulsePlaybackRequested = true;
+        }
+        if (!redstoneAllowsPlayback(serverLevel)) {
+            return;
+        }
+        playbackCompleted = false;
+        if (!hasPlaybackData()) {
+            startFromDisc(player);
+            return;
+        }
+        playbackOwnerId = player.getUUID();
+        if (!isPlaybackAllowed(serverLevel, rawUrl, player)) {
+            return;
+        }
+        long elapsedTicks = targetMillis >= 0L
+                ? saveElapsedTicks(Math.round(Math.max(0L, targetMillis) / 50.0D))
+                : saveElapsedTicks(storedElapsedTicks());
+        if (isStoredBiliSelection(rawUrl)) {
+            playing = false;
+            syncedPlayers.clear();
+            markDirty();
+            resolveAndResume(serverLevel);
+        } else {
+            playing = true;
+            startedGameTime = MonotonicMediaClock.nowTick();
+            playbackClock = MonotonicMediaClock.running(elapsedTicks * 50L, MonotonicMediaClock.nowNanos());
+            syncedPlayers.clear();
+            markDirty();
+            syncNearbyPlayers(serverLevel, remainingSeconds());
+        }
+    }
+
+    public void seekTo(ServerLevel serverLevel, long targetMillis) {
+        if (!hasPlaybackData() || durationSeconds <= 0) {
+            return;
+        }
+        long targetTicks = clampElapsedTicks(Math.round(Math.max(0L, targetMillis) / 50.0D));
+        saveElapsedTicks(targetTicks);
+        playbackClock = MonotonicMediaClock.paused(targetTicks * 50L);
+        if (playing) {
+            startedGameTime = MonotonicMediaClock.nowTick();
+            playbackClock = MonotonicMediaClock.running(targetTicks * 50L, MonotonicMediaClock.nowNanos());
+            seekGeneration++;
+            syncedPlayers.clear();
+            markDirty();
+            syncNearbyPlayers(serverLevel, remainingSeconds());
+        } else {
+            markDirty();
+        }
+    }
+
+    private long clampElapsedTicks(long ticks) {
+        long maxTicks = Math.max(0L, (long) durationSeconds * 20L - 1L);
+        return Math.max(0L, Math.min(maxTicks, ticks));
+    }
+
+    private long storedElapsedTicks() {
+        return savedElapsedTicks > 0L ? savedElapsedTicks : (long) savedElapsedSeconds * 20L;
+    }
+
+    private long saveElapsedTicks(long elapsedTicks) {
+        long clamped = clampElapsedTicks(elapsedTicks);
+        savedElapsedTicks = clamped;
+        savedElapsedSeconds = (int) (clamped / 20L);
+        return clamped;
+    }
+
+    private long snapshotElapsedTicks() {
+        if (playing) {
+            return saveElapsedTicks(getPlaybackElapsedMillis() / 50L);
+        }
+        return saveElapsedTicks(storedElapsedTicks());
+    }
+
+    private static boolean isStoredBiliSelection(String value) {
+        return value != null && (value.startsWith("BV") || value.startsWith("bv")
+                || value.startsWith("av") || value.startsWith("AV")) && value.contains("|p=");
+    }
+
+    private static String normalizeSessionId(String sessionId) {
+        return sessionId != null ? sessionId : "";
+    }
+
+    private void syncNearbyPlayers(ServerLevel serverLevel, int remainingSeconds) {
+        if (playUrl.isBlank()) {
+            return;
+        }
+        if (!isPlaybackAllowed(serverLevel, rawUrl.isBlank() ? playUrl : rawUrl, null)) {
+            stopPlayback();
+            return;
+        }
+        long elapsedMillis = elapsedMillis();
+        Set<UUID> nearby = IndexedBlockPlaybackSessionManager.publishAndSync(serverLevel, level,
+                getPlaybackSourceId(), worldPosition, playUrl, rawUrl, songName, playbackSessionId(), elapsedMillis,
+                durationSeconds * 1000L, remainingSeconds, repeatOne);
+        syncedPlayers.clear();
+        syncedPlayers.addAll(nearby);
+    }
+
+    public static void syncLoadedTurntablesToSpectators(ServerLevel serverLevel) {
+        ModernTurntableBlockEntity[] loaded;
+        synchronized (LOADED_SERVER_TURNTABLES) {
+            loaded = LOADED_SERVER_TURNTABLES.toArray(ModernTurntableBlockEntity[]::new);
+        }
+        for (ModernTurntableBlockEntity turntable : loaded) {
+            if (turntable.isRemoved() || turntable.level != serverLevel) {
+                continue;
+            }
+            turntable.syncNearbySpectators(serverLevel);
+        }
+    }
+
+    public static void clearLoadedServerTurntables() {
+        LOADED_SERVER_TURNTABLES.clear();
+    }
+
+    private void syncNearbySpectators(ServerLevel serverLevel) {
+        if (!playing || playUrl.isBlank()) {
+            return;
+        }
+        int remaining = remainingSeconds();
+        if (remaining <= 0) {
+            return;
+        }
+        long elapsedMillis = elapsedMillis();
+        Set<UUID> retained = ModernTurntableAudienceSync.syncNearbySpectators(serverLevel, level, worldPosition,
+                getPlaybackSourceId(),
+                syncedPlayers, playUrl, rawUrl, songName, playbackSessionId(), elapsedMillis,
+                durationSeconds * 1000L, remaining, SYNC_RANGE);
+        syncedPlayers.clear();
+        syncedPlayers.addAll(retained);
+    }
+
+    private void recordAudit(ServerLevel serverLevel) {
+        PlaybackAuditManager.recordModernTurntable(serverLevel, worldPosition, songName,
+                rawUrl.isBlank() ? playUrl : rawUrl, durationSeconds,
+                getPlaybackElapsedMillis(), playbackOwnerId);
+    }
+
+    private boolean isPlaybackAllowed(ServerLevel serverLevel, String sourceUrl, ServerPlayer actor) {
+        return ModernTurntablePlaybackAccess.isAllowed(serverLevel, sourceUrl, actor);
+    }
+
+    private String playbackSessionId() {
+        return ModernTurntablePlaybackClock.sessionId(level, worldPosition, startedGameTime, seekGeneration);
+    }
+
+    private int remainingSeconds() {
+        if (!playing || durationSeconds <= 0) {
+            return 0;
+        }
+        long remainingMillis = Math.max(0L, durationSeconds * 1000L - getPlaybackElapsedMillis());
+        return (int) ((remainingMillis + 999L) / 1_000L);
+    }
+
+    private long elapsedMillis() {
+        return getPlaybackElapsedMillis();
+    }
+
+    @Override
+    protected void saveAdditional(CompoundTag output, HolderLookup.Provider registries) {
+        super.saveAdditional(output, registries);
+        if (!disc.isEmpty()) {
+            output.put(DISC_TAG, disc.save(registries));
+        }
+        output.putBoolean(PLAYING_TAG, playing);
+        output.putString(RAW_URL_TAG, rawUrl);
+        output.putString(PLAY_URL_TAG, playUrl);
+        output.putString(SONG_NAME_TAG, songName);
+        output.putInt(DURATION_TAG, durationSeconds);
+        output.putLong(STARTED_TIME_TAG, startedGameTime);
+        long elapsedTicks = level instanceof ServerLevel
+                ? snapshotElapsedTicks()
+                : saveElapsedTicks(storedElapsedTicks());
+        output.putInt(ELAPSED_SECONDS_TAG, (int) (elapsedTicks / 20L));
+        output.putLong(ELAPSED_TICKS_TAG, elapsedTicks);
+        output.putInt(SEEK_GENERATION_TAG, seekGeneration);
+        if (playbackOwnerId != null) {
+            output.putString(OWNER_TAG, playbackOwnerId.toString());
+        }
+        output.putBoolean(REPEAT_ONE_TAG, repeatOne);
+        output.putString(REDSTONE_MODE_TAG, redstoneMode.serializedName());
+        output.putString(EXTRACTION_MODE_TAG, extractionMode.serializedName());
+        output.putBoolean(PLAYBACK_COMPLETED_TAG, playbackCompleted);
+        output.putInt(VOLUME_PER_MILLE_TAG, volumePerMille);
+        output.putString(SOURCE_ID_TAG, playbackSourceId.toString());
+    }
+
+    @Override
+    protected void loadAdditional(CompoundTag input, HolderLookup.Provider registries) {
+        super.loadAdditional(input, registries);
+        invalidatePlaybackIntent();
+        disc = BiliSongInfoSanitizer
+                .sanitizeDisc(input.contains(DISC_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND)
+                        ? ItemStack.parse(registries, input.getCompound(DISC_TAG)).orElse(ItemStack.EMPTY)
+                        : ItemStack.EMPTY);
+        playing = getBooleanOr(input, PLAYING_TAG, false);
+        rawUrl = getStringOr(input, RAW_URL_TAG, "");
+        playUrl = getStringOr(input, PLAY_URL_TAG, "");
+        songName = getStringOr(input, SONG_NAME_TAG, "");
+        durationSeconds = getIntOr(input, DURATION_TAG, 0);
+        startedGameTime = getLongOr(input, STARTED_TIME_TAG, 0L);
+        savedElapsedSeconds = getIntOr(input, ELAPSED_SECONDS_TAG, 0);
+        savedElapsedTicks = getLongOr(input, ELAPSED_TICKS_TAG, (long) savedElapsedSeconds * 20L);
+        seekGeneration = Math.max(0, getIntOr(input, SEEK_GENERATION_TAG, 0));
+        playbackOwnerId = parseUuid(getStringOr(input, OWNER_TAG, ""));
+        repeatOne = getBooleanOr(input, REPEAT_ONE_TAG, false);
+        redstoneMode = TurntableRedstoneMode.byName(getStringOr(input, REDSTONE_MODE_TAG, "ignore"));
+        extractionMode = TurntableExtractionMode.byName(
+                getStringOr(input, EXTRACTION_MODE_TAG, "after_playback"));
+        playbackCompleted = getBooleanOr(input, PLAYBACK_COMPLETED_TAG, false);
+        volumePerMille = Math.max(0, Math.min(1000, getIntOr(input, VOLUME_PER_MILLE_TAG, 1000)));
+        playbackSourceId = parseUuid(getStringOr(input, SOURCE_ID_TAG, ""));
+        if (playbackSourceId == null) {
+            playbackSourceId = UUID.randomUUID();
+        }
+        redstoneStateInitialized = false;
+        pulsePlaybackRequested = redstoneMode == TurntableRedstoneMode.PULSE_TOGGLE && playing;
+        saveElapsedTicks(savedElapsedTicks);
+        playbackClock = playing
+                ? MonotonicMediaClock.running(savedElapsedTicks * 50L, MonotonicMediaClock.nowNanos())
+                : MonotonicMediaClock.paused(savedElapsedTicks * 50L);
+        syncedPlayers.clear();
+        needsResolveOnLoad = playing && durationSeconds > 0 && savedElapsedTicks < (long) durationSeconds * 20L;
+    }
+
+    @Override
+    public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
+        return saveWithoutMetadata(registries);
+    }
+
+    @Override
+    public Packet<ClientGamePacketListener> getUpdatePacket() {
+        return ClientboundBlockEntityDataPacket.create(this);
+    }
+
+    public void markDirty() {
+        setChanged();
+        if (level != null) {
+            BlockState current = level.getBlockState(worldPosition);
+            if (current.getBlock() instanceof ModernTurntableBlock
+                    && (current.getValue(ModernTurntableBlock.HAS_DISC) != hasDisc()
+                            || current.getValue(ModernTurntableBlock.PLAYING) != isPlaying())) {
+                level.setBlock(worldPosition, current
+                        .setValue(ModernTurntableBlock.HAS_DISC, hasDisc())
+                        .setValue(ModernTurntableBlock.PLAYING, isPlaying()), 3);
+            }
+            BlockState state = getBlockState();
+            level.sendBlockUpdated(worldPosition, state, state, 3);
+            updateComparatorOutput();
+        }
+    }
+
+    private static UUID parseUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+}

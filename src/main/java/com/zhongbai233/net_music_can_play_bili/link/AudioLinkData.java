@@ -1,0 +1,153 @@
+package com.zhongbai233.net_music_can_play_bili.link;
+
+import com.zhongbai233.net_music_can_play_bili.media.audio.AudioPlaybackRange;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.CustomData;
+
+import javax.annotation.Nullable;
+import java.util.UUID;
+
+/**
+ * 存储在音频路由物品上的共享持久绑定数据。
+ * <p>
+ * 本类统一管理耳机绑定的 CUSTOM_DATA 结构，避免物品交互、客户端路由和服务端索引直接依赖原始 NBT 键。
+ * </p>
+ */
+public final class AudioLinkData {
+    public static final double MP4_HEADPHONE_RANGE_SQUARED = AudioPlaybackRange.HEADPHONE_LINK_DISTANCE_SQUARED;
+
+    private static final String HEADPHONE_TURNTABLE_X = "headphones_turntable_x";
+    private static final String HEADPHONE_TURNTABLE_Y = "headphones_turntable_y";
+    private static final String HEADPHONE_TURNTABLE_Z = "headphones_turntable_z";
+    private static final String HEADPHONE_MP4 = "headphones_mp4";
+    private static final String HEADPHONE_MEDIA_DEVICE = "headphones_media_device";
+
+    private AudioLinkData() {
+    }
+
+    public static void writeHeadphoneTurntable(ItemStack stack, BlockPos pos) {
+        if (stack.isEmpty() || pos == null) {
+            return;
+        }
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY, customData -> customData.update(tag -> {
+            tag.putInt(HEADPHONE_TURNTABLE_X, pos.getX());
+            tag.putInt(HEADPHONE_TURNTABLE_Y, pos.getY());
+            tag.putInt(HEADPHONE_TURNTABLE_Z, pos.getZ());
+        }));
+    }
+
+    @Nullable
+    public static BlockPos readHeadphoneTurntable(ItemStack stack) {
+        CompoundTag tag = customTag(stack);
+        if (tag == null || !tag.contains(HEADPHONE_TURNTABLE_X) || !tag.contains(HEADPHONE_TURNTABLE_Y)
+                || !tag.contains(HEADPHONE_TURNTABLE_Z)) {
+            return null;
+        }
+        return new BlockPos(LinkHelper.getIntOr(tag, HEADPHONE_TURNTABLE_X, 0), LinkHelper.getIntOr(tag, HEADPHONE_TURNTABLE_Y, 0),
+                LinkHelper.getIntOr(tag, HEADPHONE_TURNTABLE_Z, 0));
+    }
+
+    public static void writeHeadphoneMp4(ItemStack stack, UUID deviceId) {
+        writeHeadphoneMediaDevice(stack, deviceId);
+    }
+
+    public static void writeHeadphoneMediaDevice(ItemStack stack, UUID deviceId) {
+        if (stack.isEmpty() || deviceId == null) {
+            return;
+        }
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY, customData -> customData.update(tag -> {
+            tag.putString(HEADPHONE_MP4, deviceId.toString());
+            tag.putString(HEADPHONE_MEDIA_DEVICE, deviceId.toString());
+        }));
+    }
+
+    @Nullable
+    public static UUID readHeadphoneMp4(ItemStack stack) {
+        return readHeadphoneMediaDevice(stack);
+    }
+
+    @Nullable
+    public static UUID readHeadphoneMediaDevice(ItemStack stack) {
+        CompoundTag tag = customTag(stack);
+        String value = tag != null ? tag.getString(HEADPHONE_MEDIA_DEVICE) : "";
+        if (value.isBlank() && tag != null) {
+            value = tag.getString(HEADPHONE_MP4);
+        }
+        if (value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    public static void clearHeadphoneMp4(ItemStack stack) {
+        clearHeadphoneMediaDevice(stack);
+    }
+
+    public static void clearHeadphoneMediaDevice(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return;
+        }
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY, customData -> customData.update(tag -> {
+            tag.remove(HEADPHONE_MP4);
+            tag.remove(HEADPHONE_MEDIA_DEVICE);
+        }));
+    }
+
+    public static void clearHeadphoneTurntable(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return;
+        }
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
+                customData -> customData.update(tag -> {
+                    tag.remove(HEADPHONE_TURNTABLE_X);
+                    tag.remove(HEADPHONE_TURNTABLE_Y);
+                    tag.remove(HEADPHONE_TURNTABLE_Z);
+                }));
+    }
+
+    public static int clearHeadphoneLinks(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        if (readHeadphoneTurntable(stack) != null) {
+            count++;
+        }
+        if (readHeadphoneMp4(stack) != null) {
+            count++;
+        }
+        if (count <= 0) {
+            return 0;
+        }
+        stack.update(DataComponents.CUSTOM_DATA, CustomData.EMPTY,
+                customData -> customData.update(tag -> {
+                    tag.remove(HEADPHONE_TURNTABLE_X);
+                    tag.remove(HEADPHONE_TURNTABLE_Y);
+                    tag.remove(HEADPHONE_TURNTABLE_Z);
+                    tag.remove(HEADPHONE_MP4);
+                    tag.remove(HEADPHONE_MEDIA_DEVICE);
+                }));
+        return count;
+    }
+
+    public static boolean headphoneLinkedToMp4(ItemStack stack, UUID deviceId) {
+        return headphoneLinkedToMediaDevice(stack, deviceId);
+    }
+
+    public static boolean headphoneLinkedToMediaDevice(ItemStack stack, UUID deviceId) {
+        return deviceId != null && deviceId.equals(readHeadphoneMediaDevice(stack));
+    }
+
+    @Nullable
+    private static CompoundTag customTag(ItemStack stack) {
+        CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
+        return customData != null && !customData.isEmpty() ? customData.copyTag() : null;
+    }
+}

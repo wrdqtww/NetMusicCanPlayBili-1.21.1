@@ -1,0 +1,201 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'idea'
+    id 'eclipse'
+    id 'net.neoforged.moddev' version '1.0.24'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'Modrinth'
+        url = 'https://api.modrinth.com/maven'
+        content {
+            includeGroup 'maven.modrinth'
+        }
+    }
+}
+
+// Client、Bench client 与 paired client 共用的媒体运行参数。保持单一清单，避免新增场景时只接通其中一端。
+// (本移植版未启用 ModBench 运行,目录仍保留,供契约测试与后续 Bench 接入复用。)
+def sharedMediaRunProperties = [
+        [system: 'ncpb.video.advanced_features', gradle: 'ncpbVideoAdvancedFeatures', fallback: 'false'],
+        [system: 'ncpb.video.enable_bench_features', gradle: 'ncpbVideoBenchFeatures', fallback: 'false'],
+        [system: 'ncpb.video.render.backend', gradle: 'ncpbVideoRenderBackend', fallback: 'nv12'],
+        [system: 'ncpb.video.real_bench', gradle: 'ncpbRealBench', fallback: 'false'],
+        [system: 'ncpb.video.real_bench.bv', gradle: 'ncpbBenchVideo', fallback: 'BV1GJ411x7h7'],
+        [system: 'ncpb.video.real_bench.frames', gradle: 'ncpbRealBenchFrames', fallback: '12'],
+        [system: 'ncpb.video.real_bench.warmup_frames', gradle: 'ncpbRealBenchWarmupFrames', fallback: '2'],
+        [system: 'ncpb.video.real_bench.output_format', gradle: 'ncpbRealBenchOutputFormat', fallback: 'nv12'],
+        [system: 'ncpb.video.real_bench.preview', gradle: 'ncpbRealBenchPreview', fallback: 'false'],
+        [system: 'ncpb.video.real_bench.realtime', gradle: 'ncpbRealBenchRealtime', fallback: 'false'],
+        [system: 'ncpb.video.real_bench.max_fps', gradle: 'ncpbRealBenchMaxFps', fallback: '30'],
+        [system: 'ncpb.video.real_bench.qualities', gradle: 'ncpbRealBenchQualities', fallback: '16'],
+        [system: 'ncpb.live.real_bench', gradle: 'ncpbRealLiveBench', fallback: 'false'],
+        [system: 'ncpb.live.real_bench.room', gradle: 'ncpbLiveBenchRoom', fallback: '8178490'],
+        [system: 'ncpb.video.real_media_lifecycle', gradle: 'ncpbRealMediaLifecycle', fallback: 'false'],
+        [system: 'ncpb.video.real_media_lifecycle.rounds', gradle: 'ncpbRealMediaLifecycleRounds', fallback: '100'],
+        [system: 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',
+                gradle: 'ncpbRealMediaLifecycleCycleTimeoutTicks', fallback: '600'],
+        [system: 'ncpb.video.real_media_lifecycle.quality', gradle: 'ncpbRealMediaLifecycleQuality', fallback: '16'],
+        [system: 'ncpb.video.native.hwaccel', gradle: 'ncpbNativeHwaccel', fallback: 'auto'],
+        [system: 'ncpb.video.native.av1_first_frame_probe_timeout_ms',
+                gradle: 'ncpbAv1FirstFrameProbeTimeoutMillis', fallback: '2000'],
+        [system: 'ncpb.video.native.av1_first_frame_probe_max_packets',
+                gradle: 'ncpbAv1FirstFrameProbeMaxPackets', fallback: '256']
+]
+// paired clients 必须转发共享目录中的每一个 Gradle 属性。
+def sharedMediaPropertyNames = sharedMediaRunProperties.collect { it.gradle }
+
+neoForge {
+    version = project.neo_version
+
+    accessTransformers {
+        file('src/main/resources/META-INF/accesstransformer.cfg')
+    }
+
+    runs {
+        configureEach {
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            jvmArgument '-XX:+IgnoreUnrecognizedVMOptions'
+        }
+        client {
+            client()
+            def prop = { name, defaultValue -> providers.gradleProperty(name).orElse(defaultValue).get() }
+            def jvmProp = { key, value -> jvmArgument "-D${key}=${value}" }
+            sharedMediaRunProperties.each { spec ->
+                jvmProp spec.system, prop(spec.gradle, spec.fallback)
+            }
+        }
+        server {
+            server()
+            programArgument '--nogui'
+        }
+    }
+
+    // Bench client 与 client 必须消费同一共享目录(本移植版未启用 Bench,以 dead-code 保留契约)。
+    if (false) {
+        sharedMediaRunProperties.each { spec ->
+        }
+    }
+
+    mods {
+        net_music_can_play_bili {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+dependencies {
+    // NetMusic 本体(1.21.1 + NeoForge / 1.5.2)。
+    compileOnly "maven.modrinth:net-music:ePPjVRpW"
+    runtimeOnly "maven.modrinth:net-music:ePPjVRpW"
+    // Iris 兼容(compileOnly,可选 mod)。
+    compileOnly "maven.modrinth:iris:t3ruzodq"
+
+    // Mixin annotation processor(NeoForge 21.1 原生支持 mixin,仅编译期需要)。
+    compileOnly 'org.spongepowered:mixin:0.8.5'
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+
+    // Scene Editor 内联库的线性代数依赖(Minecraft 1.21.1 严格锁定 1.10.5)。
+    implementation 'org.joml:joml:1.10.5'
+
+    // 单元测试依赖(与 26.1.2 源码树测试同框架)。
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'com.google.code.gson:gson:2.11.0'
+}
+
+var replaceProperties = [
+        minecraft_version      : minecraft_version,
+        minecraft_version_range: minecraft_version_range,
+        neo_version            : neo_version,
+        neo_version_range      : neo_version_range,
+        loader_version_range   : loader_version_range,
+        mod_id                 : mod_id,
+        mod_name               : mod_name,
+        mod_license            : mod_license,
+        mod_version            : mod_version,
+        mod_authors            : mod_authors,
+        mod_description        : mod_description
+]
+processResources {
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand replaceProperties + [project: project]
+    }
+}
+
+// 旧任务名兼容(26.1.2 源码树里一些 gradle 任务引用在此移植版中不再需要)。
+
+jar {
+    manifest {
+        attributes([
+                'Specification-Title'   : mod_id,
+                'Specification-Vendor'  : mod_authors,
+                'Specification-Version' : '1',
+                'Implementation-Title'  : project.name,
+                'Implementation-Version': project.jar.archiveVersion,
+                'Implementation-Vendor' : mod_authors,
+        ])
+    }
+}
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            url = uri("file://${project.projectDir}/repo")
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xmaxerrs', '5000', '-Xmaxwarns', '50']
+}
+
+// NeoForge 21.1 运行时即 Mojmap 命名(已 javap 实证 NetMusic 1.5.2 生产 jar 亦用官方类名),
+// 且 dev 命名环境没有可用的 named→SRG TSRG(moddev 1.0 不提供增量映射任务),
+// 因此关闭 mixin refmap 生成;运行时 mixin 按字面名直接命中,无需 refmap。
+tasks.named('compileJava', JavaCompile).configure {
+    options.fork = true
+    options.forkOptions.jvmArgs.addAll(java.util.List.of('-Dmixin.env.disableRefMap=true'))
+}
+
+// 单元测试框架:JUnit Platform(否则 gradle test 会静默跳过全部用例)。
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat = 'full'
+    }
+}
+
+// 单元测试需要看到游戏类(主力源码引用 net.minecraft.*)。
+tasks.named('compileTestJava', JavaCompile).configure {
+    classpath += sourceSets.main.compileClasspath
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}
