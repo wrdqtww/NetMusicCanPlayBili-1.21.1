@@ -41,8 +41,6 @@ def sharedMediaRunProperties = [
         [system: 'ncpb.video.real_bench.realtime', gradle: 'ncpbRealBenchRealtime', fallback: 'false'],
         [system: 'ncpb.video.real_bench.max_fps', gradle: 'ncpbRealBenchMaxFps', fallback: '30'],
         [system: 'ncpb.video.real_bench.qualities', gradle: 'ncpbRealBenchQualities', fallback: '16'],
-        [system: 'ncpb.live.real_bench', gradle: 'ncpbRealLiveBench', fallback: 'false'],
-        [system: 'ncpb.live.real_bench.room', gradle: 'ncpbLiveBenchRoom', fallback: '8178490'],
         [system: 'ncpb.video.real_media_lifecycle', gradle: 'ncpbRealMediaLifecycle', fallback: 'false'],
         [system: 'ncpb.video.real_media_lifecycle.rounds', gradle: 'ncpbRealMediaLifecycleRounds', fallback: '100'],
         [system: 'ncpb.video.real_media_lifecycle.cycle_timeout_ticks',

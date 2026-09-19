@@ -46,6 +46,21 @@
 
 - [x] **第四轮验收**:`clean build` BUILD SUCCESSFUL;941/941 测试通过;`runServer` / `runClient` 在 NeoForge 21.1.233 下无 mixin 错误、无 FATAL;jar 9.15 MB;native 6 平台;双语各 120 键。
 
+## 第五轮修复(2026-09-19,第三轮聚焦复审后)
+
+第三轮复审结论:**无严重缺陷**,但列出 2 项中等 + 若干轻微,均已处理:
+
+- [x] **契约测试仍可被绕过(中等)**:复审用 8 个变异体实测,发现「块注释包裹」「`if (false)` 包裹」「`jvmProp` 改成空闭包」三种平凡变异仍能通过。
+  第五轮升级为**双向契约**:剥离行注释与块注释、断言 `jvmProp` 闭包真的调用 `jvmArgument`、断言消费点位于 `client {}` 之后且全文不存在 `if (false)`、并**反向断言目录里每个系统属性都真的被 main 源码读取**。
+  再用同样的三个变异体自证:M1(块注释)/ M2(恒假分支)/ M3(空闭包)**全部被拦住**(分别命中"must forward…"、"constant-false branch is not a contract"、"closure must actually call jvmArgument")。
+- [x] **目录里的死开关(中等)**:`ncpb.live.real_bench` 与 `ncpb.live.real_bench.room` 全项目零读取(其余 19 条均有读取点),已删除;新契约的反向断言可防止同类死开关再次混入。
+- [x] **残留死键(轻微)**:中英同步删除 `message.net_music_can_play_bili.live_streamer.room_offline`(代码只用 `room_offline_waiting`),双语各 **119 键**且完全对齐。
+- [x] **文档数字(轻微)**:修正 REVIEW 表格(41 payload / network 72 类)、main 文件数(669 mod + 39 SceneEditor)、测试数(252 类 / 941 用例)、日志清单说明(已被 `.gitignore` 排除、不在交付物内)。
+- [x] **版本号区分(轻微)**:`mod_version` bump 为 `0.7.9-beta.2+neo1.21.1` —— 旧版与新版的 jar 同名但网络不兼容(registrar v6→v7),必须有可区分的版本记号。
+- [x] **客户端复验**:本轮改动涉及 `MP4Client`/语言文件/config/registrar,已重跑 `runClient`,无 mixin 错误、无 ERROR/FATAL、native 解码器加载正常。
+
+- [x] **第五轮验收**:`clean build` BUILD SUCCESSFUL;941/941 通过;`runClient` / `runServer` 均无 mixin 错误与配置异常;jar `net_music_can_play_bili-0.7.9-beta.2+neo1.21.1.jar`(9.15 MB)。
+
 ## 独立审计(无上下文子代理)+ 修复记录(2026-09-13)
 
 审计结论:有条件可交付;发现的高危/次要项已全部处理:
@@ -63,10 +78,10 @@
 
 ## 最终验收状态(2026-09-13)
 
-- [x] `compileJava`:BUILD SUCCESSFUL(674 main 文件 + 42 SceneEditor 内联文件全绿)
-- [x] `compileTestJava`:BUILD SUCCESSFUL(约 200 个 JUnit 测试全部编译通过)
+- [x] `compileJava`:BUILD SUCCESSFUL(669 个 mod 源码 + 39 个 SceneEditor 内联文件全绿)
+- [x] `compileTestJava`:BUILD SUCCESSFUL(252 个测试类 / 941 个用例全部编译通过)
 - [x] `test`:BUILD SUCCESSFUL(exit 0)
-- [x] `jar`:BUILD SUCCESSFUL → `build\libs\net_music_can_play_bili-0.7.9-beta+neo1.21.1.jar`(9.15 MB,含 native 二进制与全部资源)
+- [x] `jar`:BUILD SUCCESSFUL → 当时的产物 `net_music_can_play_bili-0.7.9-beta+neo1.21.1.jar`(9.15 MB,含 native 二进制与全部资源)
 - [x] `runClient`:BUILD SUCCESSFUL — 主菜单完成资源加载;`BiliAudioResolver registered with NetMusic`;`FFmpeg media native 解码器加载成功: 8.0.git`;无 FATAL / 无模型加载失败
 - [x] `runServer`:BUILD SUCCESSFUL(exit 0)— 服务端注册完成、配方解析零错误
 
@@ -92,7 +107,7 @@
 ## 交付清单
 
 - 项目根:仓库根目录
-- 产物 jar:`build\libs\net_music_can_play_bili-0.7.9-beta+neo1.21.1.jar`
+- 产物 jar:`build\libs\net_music_can_play_bili-0.7.9-beta.2+neo1.21.1.jar`(0.7.9-beta.2 为对齐整合包与修正网络兼容性后的重发版本)
 - 移植文档:`docs\PORT-NOTES-1.21.1.md`、`docs\RENDER-PORT-SPEC.md`、`docs\BATCH-PLAN.md`
 - shim 层:`src\main\java\com\zhongbai233\net_music_can_play_bili\port\shim\({PortSubmitNodeCollector,PortWorldRenderEvents,PortDebugRenderTypes,PortPictureInPictureRenderer,PortGuiFramebufferBlitter,PortGuiTextures})`
-- 编译/运行日志:`compile-err-1..21.txt`、`test-err-1/2.txt`、`test-run-1.txt`、`run-client-1..4.txt`、`run-server-1/2.txt`
+- 编译/运行日志(位于本地移植工作区,已被 `.gitignore` 排除、不在仓库交付物内):`compile-err-1..22.txt` + `compile-err-render2.txt`、`test-err-1/2.txt`、`test-run-1..6.txt`、`run-client-1..5.txt`、`run-server-1..3.txt`

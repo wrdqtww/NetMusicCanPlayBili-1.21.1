@@ -111,7 +111,6 @@
   "gui.net_music_can_play_bili.live_streamer.status_empty": "No live room set",
   "message.net_music_can_play_bili.live_streamer.invalid_room": "Invalid live room. Enter a numeric room id or a live room link",
   "message.net_music_can_play_bili.live_streamer.need_room": "Set a live room id first",
-  "message.net_music_can_play_bili.live_streamer.room_offline": "Live room %s is not streaming",
   "message.net_music_can_play_bili.live_streamer.status_unavailable": "Unable to check live room %s right now; retrying in the background",
   "message.net_music_can_play_bili.live_streamer.room_offline_waiting": "Live room %s is offline, retrying every %s s",
   "key.categories.net_music_can_play_bili.main": "Net Music Can Play Bili",
