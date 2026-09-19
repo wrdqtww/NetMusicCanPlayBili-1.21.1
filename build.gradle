@@ -26,8 +26,8 @@ repositories {
     }
 }
 
-// Client、Bench client 与 paired client 共用的媒体运行参数。保持单一清单，避免新增场景时只接通其中一端。
-// (本移植版未启用 ModBench 运行,目录仍保留,供契约测试与后续 Bench 接入复用。)
+// Client 运行参数目录。新增调试/基准开关时只改这里一处,client run 会自动逐条转发到 JVM。
+// (本移植版没有 Bench/paired client run,因此只有一个消费点;契约测试会校验它确实逐条转发。)
 def sharedMediaRunProperties = [
         [system: 'ncpb.video.advanced_features', gradle: 'ncpbVideoAdvancedFeatures', fallback: 'false'],
         [system: 'ncpb.video.enable_bench_features', gradle: 'ncpbVideoBenchFeatures', fallback: 'false'],
@@ -54,9 +54,6 @@ def sharedMediaRunProperties = [
         [system: 'ncpb.video.native.av1_first_frame_probe_max_packets',
                 gradle: 'ncpbAv1FirstFrameProbeMaxPackets', fallback: '256']
 ]
-// paired clients 必须转发共享目录中的每一个 Gradle 属性。
-def sharedMediaPropertyNames = sharedMediaRunProperties.collect { it.gradle }
-
 neoForge {
     version = project.neo_version
 
@@ -80,16 +77,6 @@ neoForge {
         server {
             server()
             programArgument '--nogui'
-        }
-    }
-
-    // Bench client 与 client 必须消费同一共享目录。移植版默认不装配 ModBench,
-    // 需要时用 -PenableModBench=true 打开(开关见 gradle.properties)。
-    if (project.providers.gradleProperty('enableModBench').map { it.toBoolean() }.orElse(false).get()) {
-        runs {
-            sharedMediaRunProperties.each { spec ->
-                // Bench run 与 client 复用同一份属性目录,保证新增场景两端同时接通。
-            }
         }
     }
 

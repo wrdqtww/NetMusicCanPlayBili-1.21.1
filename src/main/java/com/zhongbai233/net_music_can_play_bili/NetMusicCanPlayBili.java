@@ -54,7 +54,7 @@ public class NetMusicCanPlayBili {
         NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onServerTick);
         NeoForge.EVENT_BUS.addListener(PlaybackAuditManager::onPlayerLoggedIn);
 
-        modEventBus.addListener(Config::onLoad);
+        modEventBus.addListener(Config::onConfigChanged);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
         MusicPlayResolverManager.registerResolver(new BiliAudioResolver());
         TempFileByteSpool.cleanupOrphanedSpoolFiles();

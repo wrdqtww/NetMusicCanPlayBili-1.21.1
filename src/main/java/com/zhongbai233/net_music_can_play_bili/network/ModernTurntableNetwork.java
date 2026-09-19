@@ -9,7 +9,8 @@ public final class ModernTurntableNetwork {
 
     public static void register(RegisterPayloadHandlersEvent event) {
         // Version 6 adds immediate correlated failures for review refresh and preview navigation.
-        PayloadRegistrar registrar = event.registrar("6");
+        // Version 7 removes the never-sent MP4ContainerDeviceIdPacket (protocol-breaking, hence the bump).
+        PayloadRegistrar registrar = event.registrar("7");
         registrar.playToServer(
                 ModernTurntableControlPacket.TYPE,
                 ModernTurntableControlPacket.STREAM_CODEC,
@@ -138,10 +139,6 @@ public final class ModernTurntableNetwork {
                 MP4InventoryDeviceIdPacket.TYPE,
                 MP4InventoryDeviceIdPacket.STREAM_CODEC,
                 MP4InventoryDeviceIdPacket::handle);
-        registrar.playToClient(
-                MP4ContainerDeviceIdPacket.TYPE,
-                MP4ContainerDeviceIdPacket.STREAM_CODEC,
-                MP4ContainerDeviceIdPacket::handle);
         registrar.playToClient(
                 MP4DeviceStateMirrorPacket.TYPE,
                 MP4DeviceStateMirrorPacket.STREAM_CODEC,

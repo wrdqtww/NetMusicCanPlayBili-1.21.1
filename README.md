@@ -43,7 +43,6 @@ NetMusicCanPlayBili 的 **NeoForge 21.1.233 / Minecraft 1.21.1** 移植版。
 | 属性 | 默认 | 作用 |
 |---|---|---|
 | `-PncpbMixinRefmap=true` | 关 | 让 mixin 注解处理器照常生成 refmap（完整映射环境下使用） |
-| `-PenableModBench=true` | 关 | 装配 ModBench 运行配置（与 26.x 主线同名开关） |
 
 ## 移植文档
 

@@ -5,7 +5,6 @@ import com.zhongbai233.net_music_can_play_bili.init.ModAttributes;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.EquipmentSlotGroup;
 import net.minecraft.world.item.Equipable;
@@ -17,8 +16,6 @@ public final class HolographicGlassesAbility {
     public static final ResourceLocation HOLOGRAPHIC_GLASSES_ID = ResourceLocation.fromNamespaceAndPath(NetMusicCanPlayBili.MODID,
             "holographic_glasses");
     public static final ResourceKey<Enchantment> HOLOGRAPHIC_GLASSES_KEY = ResourceKey.create(Registries.ENCHANTMENT,
-            HOLOGRAPHIC_GLASSES_ID);
-    public static final TagKey<Enchantment> HOLOGRAPHIC_GLASSES_ENCHANTMENT_TAG = TagKey.create(Registries.ENCHANTMENT,
             HOLOGRAPHIC_GLASSES_ID);
 
     private HolographicGlassesAbility() {

@@ -27,6 +27,10 @@ public record ClearEquippedBindingPacket() implements CustomPacketPayload {
         if (!(context.player() instanceof ServerPlayer player)) {
             return;
         }
+        // 该包由可连发的键位驱动(GLFW 按住会持续 REPEAT),必须限频,与同类配置包保持一致。
+        if (!NetworkRateLimiter.allow(player.getUUID(), "clear_equipped_binding", 3)) {
+            return;
+        }
         boolean[] equipped = { false, false };
         EquippedMediaItems.forEachEquipped(player, stack -> {
             equipped[0] |= HolographicGlassesAbility.has(stack);

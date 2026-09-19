@@ -122,20 +122,6 @@ public final class MP4Client {
         }
     }
 
-    public static void receiveContainerDeviceId(int containerSlotIndex, UUID deviceId) {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.player == null || deviceId == null || minecraft.player.containerMenu == null) {
-            return;
-        }
-        if (containerSlotIndex < 0 || containerSlotIndex >= minecraft.player.containerMenu.slots.size()) {
-            return;
-        }
-        ItemStack stack = minecraft.player.containerMenu.slots.get(containerSlotIndex).getItem();
-        if (!(stack.getItem() instanceof MP4Item)) {
-            return;
-        }
-        MP4Item.writeDeviceId(stack, deviceId);
-    }
 
     public static void receiveInventoryDeviceId(int inventorySlot, UUID deviceId) {
         Minecraft minecraft = Minecraft.getInstance();
