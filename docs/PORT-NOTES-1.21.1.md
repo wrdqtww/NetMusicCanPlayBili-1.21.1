@@ -1,7 +1,8 @@
 # NetMusicCanPlayBili → NeoForge 1.21.1 移植手册
 
 源版本:NeoForge 26.1.2.76 / Minecraft 26.1.2(Java 25, Gradle 9.5, moddev 2.0.141)
-目标版本:NeoForge 21.1.250 / Minecraft 1.21.1(Java 21, Gradle 8.14, moddev 1.0.24)
+目标版本:NeoForge 21.1.233 / Minecraft 1.21.1(Java 21, Gradle 8.14, moddev 1.0.24)
+(编译基线对齐主流整合包使用的 21.1.233;运行期兼容范围见 `gradle.properties` 的 `neo_version_range`)
 
 ## 不变的(已验证,保真移植)
 
@@ -25,7 +26,7 @@
    - mixin `compatibilityLevel` JAVA_25 → JAVA_21。
    - AT 中 26.1.2 的 `RenderType(String, RenderSetup)` 不存在 → 已移除(渲染处按需处理)。
    - moddev 2.x 的 `net.neoforged.moddev` DSL → moddev 1.x 语法。
-   - NeoForge 21.1.250 + netmusicePPjVRpW(1.5.2)+ iris t3ruzodq(1.8.12)。
+   - NeoForge 21.1.233 + netmusicePPjVRpW(1.5.2)+ iris t3ruzodq(1.8.12)。
 
 2. 注册
    - `DeferredRegister.createBlocks/createItems`(26.x)→ `DeferredRegister.create(Registries.*, MODID)`。

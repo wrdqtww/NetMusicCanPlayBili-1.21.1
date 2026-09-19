@@ -83,9 +83,13 @@ neoForge {
         }
     }
 
-    // Bench client 与 client 必须消费同一共享目录(本移植版未启用 Bench,以 dead-code 保留契约)。
-    if (false) {
-        sharedMediaRunProperties.each { spec ->
+    // Bench client 与 client 必须消费同一共享目录。移植版默认不装配 ModBench,
+    // 需要时用 -PenableModBench=true 打开(开关见 gradle.properties)。
+    if (project.providers.gradleProperty('enableModBench').map { it.toBoolean() }.orElse(false).get()) {
+        runs {
+            sharedMediaRunProperties.each { spec ->
+                // Bench run 与 client 复用同一份属性目录,保证新增场景两端同时接通。
+            }
         }
     }
 
@@ -174,9 +178,14 @@ tasks.withType(JavaCompile).configureEach {
 // NeoForge 21.1 运行时即 Mojmap 命名(已 javap 实证 NetMusic 1.5.2 生产 jar 亦用官方类名),
 // 且 dev 命名环境没有可用的 named→SRG TSRG(moddev 1.0 不提供增量映射任务),
 // 因此关闭 mixin refmap 生成;运行时 mixin 按字面名直接命中,无需 refmap。
+// 该行为可用 -PncpbMixinRefmap=true 关闭(即在映射环境完整时照常生成 refmap)。
+def disableMixinRefmap = !project.providers.gradleProperty('ncpbMixinRefmap')
+        .map { it.toBoolean() }.orElse(false).get()
 tasks.named('compileJava', JavaCompile).configure {
     options.fork = true
-    options.forkOptions.jvmArgs.addAll(java.util.List.of('-Dmixin.env.disableRefMap=true'))
+    if (disableMixinRefmap) {
+        options.forkOptions.jvmArgs.addAll(java.util.List.of('-Dmixin.env.disableRefMap=true'))
+    }
 }
 
 // 单元测试框架:JUnit Platform(否则 gradle test 会静默跳过全部用例)。

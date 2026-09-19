@@ -26,7 +26,6 @@ crash-reports/
 # 移植工作区本地材料(参考反编译/日志,非源码)
 port-ref/
 .port-analysis/
-research-*/
 compile-err-*.txt
 test-err-*.txt
 test-run-*.txt

@@ -1,4 +1,5 @@
 {
+  "net_music_can_play_bili.config.enableDebugLog": "启用调试日志",
   "block.net_music_can_play_bili.modern_turntable": "现代化唱片机",
   "block.net_music_can_play_bili.lyric_projector": "歌词投影仪",
   "block.net_music_can_play_bili.video_projector": "视频投影仪",

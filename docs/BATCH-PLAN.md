@@ -1,7 +1,19 @@
 # 移植批次计划与进度(最终状态)
 
-目标:NetMusicCanPlayBili 0.7.9-beta(NeoForge 26.1.2 / MC 26.1.2)→ NeoForge 21.1.250 / MC 1.21.1 完整保留功能。
-项目:`F:\DeepSeek\bilibili\NetMusicCanPlayBili-1.21.1`
+目标:NetMusicCanPlayBili 0.7.9-beta(NeoForge 26.1.2 / MC 26.1.2)→ NeoForge 21.1.233 / MC 1.21.1 完整保留功能。
+项目:本仓库根目录(即 `gradle.properties` / `build.gradle` 所在处)
+
+## 第二轮修复(2026-09-19,对照整合包作者反馈)
+
+反馈要点:①编译基线用了最新的 NeoForge 250,装不进 21.1.233 的整合包;②构建环境与本机耦合,他人难以构建;③存在 26.x 残留与无功效的僵尸快捷键。
+完整证据与实测过程见 `docs/REVIEW-2026-09-19.md`。
+
+- [x] **P0 编译基线降到 21.1.233**:实测 `compileJava` BUILD SUCCESSFUL,证明源码未使用 21.1.234~250 之间新增的 API;`neo_version_range` 保持 `[21.1,)` 以兼容更高的 21.1.x。
+- [x] **P0 移除本机构建耦合**:删除 `gradle.properties` 的 `systemProp.javax.net.ssl.trustStoreType=Windows-ROOT`(本机 TLS 中间人证书绕过,与 mod 功能无关);`-Dmixin.env.disableRefMap=true` 改为默认行为但可用 `-PncpbMixinRefmap=true` 关闭;文档里的 `F:\DeepSeek\...` 绝对路径改为仓库根描述。
+- [x] **P1 僵尸快捷键接线**:`clear_equipped_bindings` 语言键与 `ClearEquippedBindingPacket` 长期没有任何发送方。现按「默认不绑定」注册键位,玩家可在按键设置里自行指派,链路闭合。
+- [x] **P1 语言键对齐**:en_us 补齐 7 条缺失键(含唯一快捷键名与 6 条 message/tooltip);zh_cn 补齐 `config.enableDebugLog`。现双语各 153 键完全对齐。
+- [x] **P2 清理 26.x 残余**:`build.gradle` 的 `if (false)` 死块改为受 `-PenableModBench` 控制的真实开关(契约测试断言不变);孤儿 mixin `MinecartRevolutionProjectorLinkCleanupMixin` 移出源码树并归档到 `docs/DISABLED-MIXINS.md`(附重新启用步骤),jar 内不再包含该类。
+- [x] **本轮验收**:`clean build` BUILD SUCCESSFUL;941/941 测试通过(0 失败 0 错误 0 跳过);jar 9.15 MB;native 6 平台齐全;双语各 153 键。
 
 ## 独立审计(无上下文子代理)+ 修复记录(2026-09-13)
 
@@ -15,7 +27,8 @@
 - [x] **M3 依赖范围**:mods.toml netmusic `[1.5.1,)` → `[1.5.2,)`。
 - [x] **M6 弃用语法**:maven url space-assignment → `url = uri(...)`。
 - [x] **refmap 文档漂移**:build.gradle 注释与 PORT-NOTES 修正(已 javap 实证 NeoForge 21.1 运行时为 Mojmap,无需 refmap)。
-- [ ] M4(有意停用的 MinecartRevolution mixin 孤儿类)与 M5(孤儿贴图/模型)经复核为有意/被引用资源,不改(已在注释记录)。M7(服务器类引用 client.pad 纯逻辑类)为分包异味,无害不改。M8 环境残留进程已清理。
+- [x] M4(停用的 MinecartRevolution mixin 孤儿类)已于第二轮修复移出源码树并归档,见下节与 `docs/DISABLED-MIXINS.md`。
+- [ ] M5(孤儿贴图/模型)经逐文件引用核对**未发现孤儿**(item 模型走 1.21.1 约定式查找),不改。M7(服务器类引用 client.pad 纯逻辑类)为分包异味,无害不改。M8 环境残留进程已清理。
 
 ## 最终验收状态(2026-09-13)
 
@@ -40,14 +53,14 @@
 
 1. 生产 refmap:Mixin AP 在 dev(mojmap)命名环境没有 named→SRG TSRG,开发编译用 `-Dmixin.env.disableRefMap=true`;dev 模式运行正常(已实测),生产(reobf)发布前需补映射链生成 refmap(docs/PORT-NOTES-1.21.1.md 备注)。
 2. `rendertype_entity_translucent_emissive could not find sampler named Sampler2` 警告:自定义 YUV RenderType 在 shader 初始化时的良性警告;实际 YUV 显示失败会回退 RGBA/单平面且有日志(docs 说明)。
-3. MinecartRevolution 第三方兼容 mixin 已停用(NeoForge 1.21.1 无该 mod 发行),待目标 mod 出现后按其 1.21.1 签名重新启用(源文件保留并有注释)。
+3. MinecartRevolution 第三方兼容 mixin 已停用(NeoForge 1.21.1 无该 mod 发行)。源码已移出 `src/` 归档到 `docs/DISABLED-MIXINS.md`,待目标 mod 出现后按其 1.21.1 签名重新启用(该文档内含完整步骤)。
 4. 运行时完整游玩链路(播放真实 B 站视频/直播、Pad 地图、场景编辑器保存)需进游戏人工测试;自动校验覆盖到「客户端/服务端启动 + mod 注册 + native 加载 + 模型/配方零错误」。
 5. VideoFrameUploader 的 direct-pointer 上传快路径在 1.21.1 无公开像素指针,已降级为逐像素写入(功能等价、性能略降,代码内注明)。
 6. 读取过的临时开关 `-Dmixin.env.disableRefMap=true` 仅影响编译期 javac fork,不影响游戏运行。
 
 ## 交付清单
 
-- 项目根:`F:\DeepSeek\bilibili\NetMusicCanPlayBili-1.21.1`
+- 项目根:仓库根目录
 - 产物 jar:`build\libs\net_music_can_play_bili-0.7.9-beta+neo1.21.1.jar`
 - 移植文档:`docs\PORT-NOTES-1.21.1.md`、`docs\RENDER-PORT-SPEC.md`、`docs\BATCH-PLAN.md`
 - shim 层:`src\main\java\com\zhongbai233\net_music_can_play_bili\port\shim\({PortSubmitNodeCollector,PortWorldRenderEvents,PortDebugRenderTypes,PortPictureInPictureRenderer,PortGuiFramebufferBlitter,PortGuiTextures})`

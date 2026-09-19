@@ -4,7 +4,7 @@
 
 ## 权威参考
 
-- 1.21.1 反编译源码:`build\moddev\artifacts\neoforge-21.1.250-minecraft-sources.jar`(内含全部 net/minecraft deobf 源)。
+- 1.21.1 反编译源码:`build\moddev\artifacts\neoforge-<neo_version>-minecraft-sources.jar`(内含全部 net/minecraft deobf 源;当前基线 21.1.233)。
   - 用法:`jar tf` 列类,解压后用 read 读单个 .java。
 - NetMusic 1.5.2(1.21.1)解压树:`port-ref\netmusic-x`(javap -classpath 查 ModelMusicPlayer$Block 等)。
 
