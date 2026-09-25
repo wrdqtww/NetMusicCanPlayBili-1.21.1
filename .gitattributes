@@ -1,0 +1,16 @@
+# 统一行尾,保证跨平台可构建
+# 索引中一律存 LF;gradlew 的 shebang 若带 CR 会让 Linux/macOS 报 "bad interpreter"。
+* text=auto eol=lf
+
+# Windows 批处理必须保留 CRLF
+*.bat text eol=crlf
+
+# 二进制文件禁止行尾转换
+*.jar binary
+*.png binary
+*.jpg binary
+*.ogg binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.zip binary
