@@ -14,7 +14,7 @@ NetMusicCanPlayBili 的 **NeoForge 21.1.233 / Minecraft 1.21.1** 移植版。
 | Minecraft | 1.21.1 |
 | NeoForge 编译基线 | 21.1.233 |
 | NeoForge 运行范围 | 21.1.x（`neoforge.mods.toml` 声明 `[21.1,)`） |
-| mod 版本 | 0.7.9-beta.2+neo1.21.1 |
+| mod 版本 | 0.7.9-beta.3+neo1.21.1 |
 | Java | 21 |
 | Gradle | 8.14（wrapper 自带） |
 | NetMusic | 1.5.2+（必需） |
@@ -36,7 +36,7 @@ NetMusicCanPlayBili 的 **NeoForge 21.1.233 / Minecraft 1.21.1** 移植版。
 ./gradlew build
 ```
 
-产物：`build/libs/net_music_can_play_bili-0.7.9-beta.2+neo1.21.1.jar`
+产物：`build/libs/net_music_can_play_bili-0.7.9-beta.3+neo1.21.1.jar`
 
 ### 可选构建开关
 
