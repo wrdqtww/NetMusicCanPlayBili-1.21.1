@@ -83,7 +83,24 @@ public class LyricProjectorBlock extends Block implements EntityBlock {
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
         super.setPlacedBy(level, pos, state, placer, stack);
         if (!level.isClientSide()) {
+            applyPlacementFacing(level, pos, placer);
             applyLinkedPosition(level, pos, stack, placer);
+        }
+    }
+
+    /**
+     * 让投影面朝向放置者的水平视线方向，与视频投影仪保持一致。
+     *
+     * <p>{@code projectionYaw} 默认 180°（法线朝北），放置时按 {@code Direction#toYRot()} 写入初值，
+     * 使南/西/北/东分别对应 0°/90°/180°/270°。放置者可能为空（发射器），此时保留默认朝向。</p>
+     */
+    private static void applyPlacementFacing(Level level, BlockPos pos, LivingEntity placer) {
+        if (placer == null) {
+            return;
+        }
+        if (level.getBlockEntity(pos) instanceof LyricProjectorBlockEntity projector) {
+            projector.setProjectionYaw(placer.getDirection().toYRot());
+            projector.markDirtyAndSync();
         }
     }
 

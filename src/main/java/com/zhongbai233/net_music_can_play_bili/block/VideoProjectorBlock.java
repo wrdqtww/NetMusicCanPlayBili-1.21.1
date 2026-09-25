@@ -83,7 +83,31 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
         super.setPlacedBy(level, pos, state, placer, stack);
         if (!level.isClientSide()) {
+            applyPlacementFacing(level, pos, placer);
             applyLinkedPosition(level, pos, stack, placer);
+        }
+    }
+
+    /**
+     * 让投射面朝向放置者的水平视线方向。
+     *
+     * <p>方块实体里 {@code projectionYaw} 的默认值是 180°，对应投射面法线朝北，所以此前不论从哪个
+     * 方向放置，屏幕都固定朝北。这里在放置时写入初始值：{@code Direction#toYRot()} 给出的角度恰好
+     * 使屏幕法线指向该方向（南=0°、西=90°、北=180°、东=270°），而渲染侧就是
+     * {@code Axis.YP.rotationDegrees(projectionYaw)}，两者一致。</p>
+     *
+     * <p>只吸附到四个正方向，便于对齐建筑；玩家之后仍可在配置界面的 yaw 滑条（0–360°）上任意微调。
+     * 放置者可能为空（例如发射器放置），此时保留默认朝向。</p>
+     */
+    private static void applyPlacementFacing(Level level, BlockPos pos, LivingEntity placer) {
+        if (placer == null) {
+            return;
+        }
+        if (level.getBlockEntity(pos) instanceof VideoProjectorBlockEntity projector) {
+            projector.setProjectionYaw(placer.getDirection().toYRot());
+            // setProjectionYaw 只调 setChanged()，跨端还要靠方块实体更新包；否则客户端在区块重载前
+            // 仍按默认 180° 渲染，表现为"放下时朝向没变"。
+            projector.markDirtyAndSync();
         }
     }
 
