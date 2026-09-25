@@ -53,6 +53,8 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
     private TextureTarget target;
     private RenderTargetTexture texture;
     private MultiBufferSource.BufferSource guiBuffer;
+    /** {@code guiBuffer} 底层的 off-heap 缓冲；1.21.1 的 BufferSource 不负责释放它。 */
+    private ByteBufferBuilder guiBufferBuilder;
     private boolean registered;
     private boolean failed;
     private boolean loggedReady;
@@ -146,7 +148,8 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
         minecraft.getTextureManager().register(textureId, texture);
         registered = true;
         // 隔离 BufferSource:本渲染器在世界渲染事件层级调用,绝不能 flush 共享 GUI/世界批次。
-        guiBuffer = MultiBufferSource.immediate(new ByteBufferBuilder(4096));
+        guiBufferBuilder = new ByteBufferBuilder(4096);
+        guiBuffer = MultiBufferSource.immediate(guiBufferBuilder);
     }
 
     private boolean shouldRender(PadGuiViewState view) {
@@ -656,6 +659,10 @@ final class PadOffscreenGuiRenderer implements AutoCloseable {
         }
         texture = null;
         guiBuffer = null;
+        if (guiBufferBuilder != null) {
+            guiBufferBuilder.close();
+            guiBufferBuilder = null;
+        }
         mapRenderContext.close();
     }
 }

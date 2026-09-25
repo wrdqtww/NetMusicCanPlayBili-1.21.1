@@ -87,6 +87,10 @@ final class Yuv420pPlaneTexture extends AbstractTexture {
             if (uploadBuffer != null) {
                 MemoryResourceTracker.freed(Category.TEXTURE_STAGING, uploadBuffer.capacity());
                 MemoryUtil.memFree(uploadBuffer);
+                // 必须立即置空：memAlloc 失败抛的是 OutOfMemoryError，不被这里的
+                // catch (RuntimeException | LinkageError) 覆盖，字段若仍指向已释放地址，
+                // 后续 close() 会二次 memFree 同一指针。
+                uploadBuffer = null;
             }
             uploadBuffer = MemoryUtil.memAlloc(byteCount);
             MemoryResourceTracker.allocated(Category.TEXTURE_STAGING, uploadBuffer.capacity());

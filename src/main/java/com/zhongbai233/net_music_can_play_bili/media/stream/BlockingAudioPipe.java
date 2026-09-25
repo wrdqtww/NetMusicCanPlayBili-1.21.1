@@ -5,6 +5,15 @@ import java.io.InputStream;
 
 public final class BlockingAudioPipe extends InputStream {
     private static final int DEFAULT_MAX_CAPACITY = 32 * 1024 * 1024;
+    /**
+     * 写端在缓冲区满时允许等待读端消费的最长秒数。
+     *
+     * <p>原先写端用无参 {@code wait()} 无限等待，而退出条件只看 {@code readerClosed}，后者只在
+     * {@link #close()} 里置位（{@link #closeWriter()} 置的是另一个标志）。一旦读端线程因解码异常
+     * 退出而调用方没在 finally 中 close()，写端会永久挂在 wait() 上且无任何诊断。这里改成有界等待：
+     * 缓冲持续满 30 秒即判定读端已死并抛出 IOException，正常播放时读端持续消费，不会触发。</p>
+     */
+    private static final int WRITER_STALL_TIMEOUT_SECONDS = 30;
 
     private final int initialCapacity;
     private final int maxCapacity;
@@ -85,10 +94,16 @@ public final class BlockingAudioPipe extends InputStream {
         }
 
         int written = 0;
+        int stalledSeconds = 0;
         while (written < len) {
             while (size == buffer.length && !readerClosed && buffer.length >= maxCapacity) {
-                waitForPipe();
+                waitForPipe(1_000L);
+                if (++stalledSeconds > WRITER_STALL_TIMEOUT_SECONDS) {
+                    throw new IOException("audio pipe writer stalled: reader not consuming for "
+                            + WRITER_STALL_TIMEOUT_SECONDS + "s");
+                }
             }
+            stalledSeconds = 0;
             if (readerClosed) {
                 throw new IOException("audio pipe reader closed");
             }
@@ -139,8 +154,16 @@ public final class BlockingAudioPipe extends InputStream {
     }
 
     private void waitForPipe() throws IOException {
+        waitForPipe(0L);
+    }
+
+    private void waitForPipe(long timeoutMillis) throws IOException {
         try {
-            wait();
+            if (timeoutMillis > 0L) {
+                wait(timeoutMillis);
+            } else {
+                wait();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("audio pipe interrupted", e);

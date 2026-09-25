@@ -31,6 +31,15 @@ public final class Fmp4ToMp4Converter {
     private static final int TFHD_DEFAULT_SAMPLE_SIZE = 0x000010;
     private static final int TFHD_DEFAULT_SAMPLE_FLAGS = 0x000020;
     private static final byte[] DEFAULT_ASC = { 0x11, (byte) 0x90 };
+    /**
+     * 单个 trun 允许的最大样本数。
+     *
+     * <p>{@code trun.sample_count} 来自 B 站 CDN 的 fMP4 分片，属不可信输入：原实现直接把它当
+     * 数组长度使用，负值会抛 NegativeArraySizeException，超大值会先分配数 GB 再 OutOfMemoryError，
+     * 且 {@code length + sc} 的整型溢出会再次变成负长度。真实分片每 trun 最多数千个样本，
+     * 这里按 100 万的宽裕上界截断。</p>
+     */
+    private static final int MAX_SAMPLES_PER_TRUN = 1_000_000;
 
     public static byte[] convertToStandardMp4(byte[] fmp4Data) throws IOException {
         ByteBuffer buf = ByteBuffer.wrap(fmp4Data).order(ByteOrder.BIG_ENDIAN);
@@ -223,13 +232,16 @@ public final class Fmp4ToMp4Converter {
         if (count <= 0) {
             return SampleTable.EMPTY;
         }
+        // 必须无条件把 sizes 补齐到 count：sampleSizes 与 ptsNanos 长度不等会让消费者按索引
+        // 交叉取用，导致帧与 PTS 整体错位（音画不同步）。原实现只在 defaultSampleSize > 0 时补齐，
+        // 而 parseTrun 仅在"该 trun 不含 per-sample size"的分支才回写 defaultSampleSize，
+        // 因此多 trun 混合时确实能构造出 length < count 且 defaultSampleSize == 0 的输入。
         int[] sizes = pr.sampleSizes;
-        if ((sizes == null || sizes.length < count) && pr.defaultSampleSize > 0) {
+        if (sizes == null || sizes.length < count) {
             sizes = new int[count];
-            java.util.Arrays.fill(sizes, pr.defaultSampleSize);
-        }
-        if (sizes == null) {
-            sizes = new int[0];
+            if (pr.defaultSampleSize > 0) {
+                java.util.Arrays.fill(sizes, pr.defaultSampleSize);
+            }
         }
 
         long[] ptsNanos = new long[count];
@@ -387,6 +399,11 @@ public final class Fmp4ToMp4Converter {
         ByteBuffer trun = ByteBuffer.wrap(cd).order(ByteOrder.BIG_ENDIAN);
         int pos = 4;
         int sc = trun.getInt(pos);
+        if (sc < 0 || sc > MAX_SAMPLES_PER_TRUN) {
+            // 损坏或被改写的分片：跳过该 trun，绝不让它决定数组长度。
+            logger().warn("fMP4 trun 样本数越界，已忽略该 trun: sampleCount={}, boxBytes={}", sc, cd.length);
+            return;
+        }
         pos += 4;
         boolean hdo = (flags & TRUN_DATA_OFFSET) != 0, hfs = (flags & TRUN_FIRST_SAMPLE_FLAGS) != 0;
         boolean hsd = (flags & TRUN_SAMPLE_DURATION) != 0, hss = (flags & TRUN_SAMPLE_SIZE) != 0;
@@ -840,6 +857,9 @@ public final class Fmp4ToMp4Converter {
         public long baseMediaDecodeTime = -1L;
 
         void ensureCapacity(int min) {
+            if (min <= 0 || min > MAX_SAMPLES_PER_TRUN) {
+                return;
+            }
             if (sampleSizes == null)
                 sampleSizes = new int[min];
             else if (sampleSizes.length < min) {
@@ -850,6 +870,9 @@ public final class Fmp4ToMp4Converter {
         }
 
         void ensureTimingCapacity(int min) {
+            if (min <= 0 || min > MAX_SAMPLES_PER_TRUN) {
+                return;
+            }
             if (sampleDurations == null) {
                 sampleDurations = new long[min];
                 sampleCompositionOffsets = new long[min];

@@ -47,7 +47,7 @@ final class VideoPlaybackTextures {
 
     boolean uploadRgba(byte[] rgba, int width, int height) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || rgba.length < width * height * 4) {
+        if (minecraft.level == null || rgba == null || rgba.length < width * height * 4) {
             return false;
         }
         ensureRgbaTextures(width, height);

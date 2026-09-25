@@ -104,6 +104,7 @@ final class VideoPlaybackInstance {
     private volatile boolean performanceNoH264Logged;
     private volatile int firstFrameRecoveryAttempts;
     private int consecutiveBadUploads;
+    private int uploadFailureLogs;
 
     VideoPlaybackInstance(String videoUrl, int targetWidth, int targetHeight, int fps, int codecId,
             String sessionId, long startOffsetMillis, long totalMillis, Collection<BlockPos> projectorPositions,
@@ -298,6 +299,13 @@ final class VideoPlaybackInstance {
             com.zhongbai233.net_music_can_play_bili.client.ClientMediaLifecycleHandler
                     .tripMemoryProtection("video texture allocation failed: " + error.getMessage());
             LOGGER.error("视频纹理内存分配失败并触发熔断: session={}", sessionId(), error);
+        } catch (RuntimeException error) {
+            // 上传链路上的尺寸不匹配、纹理状态异常等不应打断渲染 tick：按坏帧跳过并有限次记录。
+            if (uploadFailureLogs < 3) {
+                uploadFailureLogs++;
+                LOGGER.warn("视频帧上传异常已跳过: session={}, target={}x{}, failure={}/3",
+                        sessionId(), targetWidth, targetHeight, uploadFailureLogs, error);
+            }
         } finally {
             frame.close();
         }

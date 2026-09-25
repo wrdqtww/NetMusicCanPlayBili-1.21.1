@@ -314,7 +314,10 @@ abstract class VideoBillboardUploadSupport extends VideoBillboardGeometrySupport
     }
 
     protected static boolean uploadDecodedFrameOnRenderThread(DecodedFrame frame, int frameWidth, int frameHeight) {
-        if (isCustomYuvShaderAvailable() && frame != null && isYuvFrameFormat(frame.format())) {
+        if (frame == null) {
+            return false;
+        }
+        if (isCustomYuvShaderAvailable() && isYuvFrameFormat(frame.format())) {
             return uploadYuvFrameOnRenderThread(frame, frameWidth, frameHeight);
         }
         return uploadFrameOnRenderThread(Yuv420pConverter.toUploadRgba(frame, frameWidth, frameHeight), frameWidth,
@@ -525,6 +528,10 @@ abstract class VideoBillboardUploadSupport extends VideoBillboardGeometrySupport
     protected static boolean uploadFrameOnRenderThread(byte[] rgba, int frameWidth, int frameHeight) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null) {
+            return false;
+        }
+        if (rgba == null) {
+            // 转换失败（尺寸不匹配/格式不支持）时 Yuv420pConverter 返回 null，此处按坏帧跳过。
             return false;
         }
         if (rgba.length < frameWidth * frameHeight * 4) {

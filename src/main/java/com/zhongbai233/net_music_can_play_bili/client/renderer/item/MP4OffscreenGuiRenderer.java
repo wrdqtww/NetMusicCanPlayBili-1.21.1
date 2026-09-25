@@ -41,6 +41,15 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
     private TextureTarget target;
     private RenderTargetTexture texture;
     private MultiBufferSource.BufferSource guiBuffer;
+    /**
+     * {@code guiBuffer} 底层的 off-heap 缓冲。
+     *
+     * <p>1.21.1 的 {@code MultiBufferSource.BufferSource} 没有 {@code close()}，它只持有
+     * ByteBufferBuilder 而从不释放，所有权在调用方。原实现把 builder 直接丢掉、close() 只置
+     * guiBuffer = null，导致每次设备移出快捷栏（stopDevicesOutsideHotbar → releaseDeviceResources）
+     * 都泄漏一块已经过 resize 的原生内存。这里显式持有并在 close() 中释放。</p>
+     */
+    private ByteBufferBuilder guiBufferBuilder;
     private boolean registered;
     private boolean failed;
     private boolean loggedReady;
@@ -102,7 +111,8 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
         minecraft.getTextureManager().register(textureId, texture);
         registered = true;
         // 隔离 BufferSource:本渲染器在世界渲染事件层级调用,绝不能 flush 共享 GUI/世界批次。
-        guiBuffer = MultiBufferSource.immediate(new ByteBufferBuilder(4096));
+        guiBufferBuilder = new ByteBufferBuilder(4096);
+        guiBuffer = MultiBufferSource.immediate(guiBufferBuilder);
     }
 
     private void render(UUID deviceId) {
@@ -781,5 +791,9 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
         }
         texture = null;
         guiBuffer = null;
+        if (guiBufferBuilder != null) {
+            guiBufferBuilder.close();
+            guiBufferBuilder = null;
+        }
     }
 }
