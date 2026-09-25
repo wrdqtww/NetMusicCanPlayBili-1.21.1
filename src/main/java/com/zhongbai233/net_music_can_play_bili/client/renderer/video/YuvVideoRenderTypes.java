@@ -5,13 +5,17 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.logging.LogUtils;
 import com.zhongbai233.net_music_can_play_bili.NetMusicCanPlayBili;
+import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import org.slf4j.Logger;
+
+import java.util.function.Function;
 
 /**
  * GPU 端 YUV/NV12 转 RGB 的 RenderType 工厂。
@@ -177,9 +181,40 @@ public final class YuvVideoRenderTypes {
         return RenderType.entityTranslucent(texture);
     }
 
-    /** Flat-lit emissive (lightmap-independent) RGBA overlay. */
+    /**
+     * Flat-lit emissive (lightmap-independent) RGBA surface for full-screen video / placeholder content.
+     *
+     * <p><b>为什么不能直接用原版 {@code entityTranslucentEmissive}:</b>
+     * 1.21.1 的原版实现把写掩码设成了 {@code COLOR_WRITE}(只写颜色、不写深度),
+     * 这是为"贴在不透明实体表面的发光贴花"设计的。而投影仪 / 全息眼镜的屏幕是
+     * <b>整块不透明显示面</b>:屏幕不写深度时,后于它渲染的云,以及处在屏幕后方的
+     * 半透明水面都会盖到画面之上 —— 表现为"画面浮在世界最上层、云和水穿帮"。
+     * 这里改用 {@code COLOR_DEPTH_WRITE},让画面像不透明方块一样参与深度遮挡。</p>
+     */
     public static RenderType videoRgbaEmissiveEntity(ResourceLocation texture) {
-        return RenderType.entityTranslucentEmissive(texture);
+        return VIDEO_RGBA_EMISSIVE.apply(texture);
+    }
+
+    /** 与 {@link #videoRgbaEmissiveEntity} 同源,按纹理记忆化(RenderType 每帧重建会打散顶点批次)。 */
+    private static final Function<ResourceLocation, RenderType> VIDEO_RGBA_EMISSIVE = Util.memoize(
+            YuvVideoRenderTypes::createVideoRgbaEmissiveDepthWriting);
+
+    private static RenderType createVideoRgbaEmissiveDepthWriting(ResourceLocation texture) {
+        return RenderType.create(
+                "ncpb_video_rgba_emissive",
+                DefaultVertexFormat.NEW_ENTITY,
+                VertexFormat.Mode.QUADS,
+                1536,
+                true,
+                true,
+                RenderType.CompositeState.builder()
+                        .setShaderState(new RenderStateShard.ShaderStateShard(
+                                GameRenderer::getRendertypeEntityTranslucentEmissiveShader))
+                        .setTextureState(new RenderStateShard.TextureStateShard(texture, false, false))
+                        .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
+                        .setCullState(RenderStateShard.NO_CULL)
+                        .setWriteMaskState(RenderStateShard.COLOR_DEPTH_WRITE)
+                        .createCompositeState(true));
     }
 
     public static RenderType padVideoRgbaEntity(ResourceLocation texture) {

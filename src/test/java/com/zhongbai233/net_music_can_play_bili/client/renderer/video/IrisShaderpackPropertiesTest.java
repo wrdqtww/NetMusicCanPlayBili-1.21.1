@@ -21,7 +21,12 @@ class IrisShaderpackPropertiesTest {
     @Test
     void defaultsRemainCompatible() {
         assertTrue(IrisShaderpackProperties.forceYuvShaderEnabled());
-        assertFalse(IrisShaderpackProperties.customYuvShaderDisabled());
+        // 1.21.1 移植相对上游 26.x 的唯一默认值偏离：26.x 用 RenderPipeline/RenderSetup 承载
+        // YUV 多平面渲染，1.21.1 没有该 API，移植版自建的 RenderType 实测不会被光栅化
+        // （恒定色着色器下全屏 57600 个采样点仅命中 2 个像素），视频面永远不可见。故默认关闭
+        // 自定义 YUV 着色器，回退到已确认可用的 CPU→RGBA 路径；需要实验 YUV 路径时显式传
+        // -Dncpb.video.iris.disable_yuv_shader=false 打开。
+        assertTrue(IrisShaderpackProperties.customYuvShaderDisabled());
         assertTrue(IrisShaderpackProperties.threePlaneYuvAllowed());
         assertTrue(IrisShaderpackProperties.yuvShaderpackBypassEnabled());
         assertEquals("ENTITIES_TRANSLUCENT", IrisShaderpackProperties.yuvProgramName());

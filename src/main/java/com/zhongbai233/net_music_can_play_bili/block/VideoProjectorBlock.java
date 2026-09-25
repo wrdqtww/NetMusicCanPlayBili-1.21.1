@@ -2,12 +2,16 @@ package com.zhongbai233.net_music_can_play_bili.block;
 
 import com.mojang.serialization.MapCodec;
 import com.zhongbai233.net_music_can_play_bili.blockentity.VideoProjectorBlockEntity;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
 import com.zhongbai233.net_music_can_play_bili.link.LinkHelper;
 import com.zhongbai233.net_music_can_play_bili.item.MediaManagementToolItem;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.ItemInteractionResult;
@@ -102,15 +106,36 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
     /**
      * 同步写入标准方块实体组件。MinecartRevolution 等通用方块载具会复制该组件，
      * 因而无需依赖本模组的物品 CUSTOM_DATA 即可保留唱片机链接。
+     *
+     * <p><b>必须补 id:</b>{@code BLOCK_ENTITY_DATA} 的持久化 codec 是
+     * {@code CustomData.CODEC_WITH_ID},要求 NBT 含字符串类型的 {@code id}(方块实体类型)。
+     * 从创造栏取出的新物品没有该组件,此时若直接写入就会得到一个"缺 id"的组件,
+     * 玩家背包保存(自动保存/退出世界)时抛
+     * {@code IllegalStateException: Missing id for entity in: {...}} 并使服务端崩溃。</p>
      */
     public static void writeLinkedBlockEntityData(ItemStack stack, BlockPos linkedPos) {
         CustomData existing = stack.get(DataComponents.BLOCK_ENTITY_DATA);
         CompoundTag tag = existing != null ? existing.copyTag() : new CompoundTag();
+        ensureBlockEntityId(tag);
         tag.putBoolean("LinkedTarget_has", true);
         tag.putInt("LinkedTarget_x", linkedPos.getX());
         tag.putInt("LinkedTarget_y", linkedPos.getY());
         tag.putInt("LinkedTarget_z", linkedPos.getZ());
         stack.set(DataComponents.BLOCK_ENTITY_DATA, CustomData.of(tag));
+    }
+
+    /**
+     * 保证 {@code BLOCK_ENTITY_DATA} 携带方块实体类型 id。
+     * 只在本模组投影仪自身的数据里补写,不会覆盖别处写好的 id。
+     */
+    private static void ensureBlockEntityId(CompoundTag tag) {
+        if (tag.contains("id", Tag.TAG_STRING)) {
+            return;
+        }
+        ResourceLocation key = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(ModBlockEntities.VIDEO_PROJECTOR.get());
+        if (key != null) {
+            tag.putString("id", key.toString());
+        }
     }
 
     /** 清除标准方块实体组件中的唱片机链接，同时保留投影参数等其它数据。 */
@@ -128,6 +153,7 @@ public class VideoProjectorBlock extends Block implements EntityBlock {
             stack.remove(DataComponents.BLOCK_ENTITY_DATA);
             return;
         }
+        ensureBlockEntityId(tag);
         stack.set(DataComponents.BLOCK_ENTITY_DATA, CustomData.of(tag));
     }
 
