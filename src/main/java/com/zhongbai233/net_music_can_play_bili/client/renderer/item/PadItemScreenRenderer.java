@@ -12,6 +12,7 @@ import com.zhongbai233.net_music_can_play_bili.client.PadFocusState;
 import com.zhongbai233.net_music_can_play_bili.client.PadRenderProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaPlayback;
 import com.zhongbai233.net_music_can_play_bili.item.PadItem;
@@ -312,7 +313,7 @@ public final class PadItemScreenRenderer {
         float vy0 = y0 - insetY;
         float vx1 = x1 - insetX;
         float vy1 = y1 + insetY;
-        boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+        boolean useRgbaFallback = VideoBillboardPreview.requiresRgbaFallback();
         MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forHandheldDevice(deviceId);
         boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
         MP4Nv12VideoLayer nv12Layer = MP4Nv12VideoLayer.forHandheldDevice(deviceId);

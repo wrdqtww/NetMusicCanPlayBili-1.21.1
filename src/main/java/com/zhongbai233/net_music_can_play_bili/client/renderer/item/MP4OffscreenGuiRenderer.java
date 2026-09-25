@@ -117,8 +117,6 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
 
     private void render(UUID deviceId) {
         Minecraft minecraft = Minecraft.getInstance();
-        GuiGraphics graphics = new GuiGraphics(minecraft, guiBuffer);
-        drawGui(graphics, MP4GuiViewState.capture(deviceId));
 
         RenderSystem.backupProjectionMatrix();
         RenderSystem.getModelViewStack().pushMatrix();
@@ -129,9 +127,18 @@ final class MP4OffscreenGuiRenderer implements AutoCloseable {
         RenderSystem.enableScissor(0, 0, TARGET_WIDTH, TARGET_HEIGHT);
         RenderSystem.clearColor(0.0F, 0.0F, 0.0F, 0.0F);
         RenderSystem.clear(16640, Minecraft.ON_OSX);
-        Matrix4f projection = new Matrix4f().setOrtho(0.0F, TARGET_WIDTH, TARGET_HEIGHT, 0.0F, 1000.0F, 3000.0F);
+        // GuiGraphics 输出的是逻辑坐标(WIDTH x HEIGHT),不是离屏纹理的像素尺寸。
+        // 上游 26.x 用 TARGET_WIDTH/HEIGHT 是因为它的 GuiRenderer 内部还有一层 scale;
+        // 1.21.1 直接用 GuiGraphics,投影必须覆盖逻辑尺寸,否则界面只占左上角 1/SCALE^2。
+        Matrix4f projection = new Matrix4f().setOrtho(0.0F, WIDTH, HEIGHT, 0.0F, -21000.0F, 21000.0F);
         RenderSystem.setProjectionMatrix(projection, VertexSorting.ORTHOGRAPHIC_Z);
         try {
+            // GuiGraphics 的每个绘制方法(fill/drawString/...)末尾都会调用 flushIfUnmanaged(),
+            // 在 managed=false 的默认状态下立即 endBatch。因此它必须在离屏 target 已绑定、
+            // 投影已就绪之后才构造并绘制;否则全部顶点会落到当时绑定的 framebuffer(主屏),
+            // 离屏纹理只剩 clear 的结果 —— 屏幕上一片空白的根因。
+            GuiGraphics graphics = new GuiGraphics(minecraft, guiBuffer);
+            drawGui(graphics, MP4GuiViewState.capture(deviceId));
             graphics.flush();
             guiBuffer.endBatch();
             texture.refreshView();

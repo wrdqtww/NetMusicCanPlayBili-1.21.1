@@ -27,6 +27,20 @@ abstract class VideoBillboardGeometrySupport extends VideoBillboardQuadSupport {
         return CUSTOM_YUV_SHADER_BACKEND && !IrisShaderpackCompat.shouldDisableCustomYuvShader();
     }
 
+    /**
+     * 设备面是否必须改走 CPU→RGBA 回退。
+     *
+     * <p>两种情况都需要：一是装了 Iris shaderpack（自建 YUV core shader 与 shaderpack 的采样器
+     * 约定冲突），二是自定义 YUV 着色器在当前平台<b>根本不可用</b>——1.21.1 没有 26.x 的
+     * RenderPipeline，它由自建 RenderType 承载，实测四边形不会被光栅化。</p>
+     *
+     * <p>投影仪路径早已按可用性回退，但 MP4、掌机与全息眼镜三处只判断了"是否装了 shaderpack"，
+     * 于是默认配置（无 shaderpack）下继续走 NV12，表现为这些设备面<b>永远没有画面</b>。</p>
+     */
+    public static boolean requiresRgbaFallback() {
+        return !isCustomYuvShaderAvailable() || IrisShaderpackCompat.isShaderPackInUse();
+    }
+
     static Fmp4NativeVideoDecoder.OutputFormat yuvDecodeFormat() {
         if (NV12_DECODE_BACKEND) {
             return Fmp4NativeVideoDecoder.OutputFormat.NV12;

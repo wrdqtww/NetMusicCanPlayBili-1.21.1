@@ -51,7 +51,7 @@ public final class HolographicGlassesWorldScreenRenderer {
             return;
         }
 
-        boolean rgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+        boolean rgbaFallback = VideoBillboardPreview.requiresRgbaFallback();
         Camera camera = minecraft.gameRenderer.getMainCamera();
         PortSubmitNodeCollector collector = PortWorldRenderEvents.begin();
         try {

@@ -1,6 +1,6 @@
 package com.zhongbai233.net_music_can_play_bili.client;
 
-import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.sync.ClientMediaTimelineView;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaDeviceProfile;
 import com.zhongbai233.net_music_can_play_bili.client.sync.HandheldMediaPlayback;
@@ -61,8 +61,18 @@ final class HandheldVideoFrameTimeline {
         };
     }
 
+    /**
+     * 手持视频是否必须解码成 RGBA。
+     *
+     * <p>与投影仪路径共用同一判据 {@link VideoBillboardPreview#requiresRgbaFallback()}：装了 Iris
+     * shaderpack，<b>或者</b>自定义 YUV 着色器在当前平台不可用。</p>
+     *
+     * <p>原实现只判断前者，于是默认配置（无 shaderpack）下会话被建成 NV12 输出——而 1.21.1 上
+     * 承载 NV12 的自建 RenderType 不会被光栅化，同时 RGBA 回退层又因格式不是 RGBA 而拒绝上传，
+     * 两边都走不通，表现为 MP4 与掌机<b>永远没有画面</b>。</p>
+     */
     static boolean shouldUseRgbaFallback() {
-        return IrisShaderpackCompat.isShaderPackInUse();
+        return VideoBillboardPreview.requiresRgbaFallback();
     }
 
     static boolean hasActiveRgbaConsumer(HandheldDeviceVideoState state) {

@@ -17,10 +17,14 @@ import com.zhongbai233.net_music_can_play_bili.gui.MediaToolBindingScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.MediaToolReportScreen;
 import com.zhongbai233.net_music_can_play_bili.gui.HolographicScreenConfigTestScreen;
 import com.zhongbai233.net_music_can_play_bili.init.ModBlockEntities;
+import com.zhongbai233.net_music_can_play_bili.init.ModBlocks;
 import com.zhongbai233.net_music_can_play_bili.init.ModMenus;
 import com.zhongbai233.net_music_can_play_bili.port.shim.PortPictureInPictureRenderer;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.ItemBlockRenderTypes;
+import net.minecraft.client.renderer.RenderType;
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
@@ -36,6 +40,7 @@ public final class ModernTurntableClientEvents {
 
     public static void register(IEventBus modEventBus) {
         modEventBus.addListener(ModernTurntableClientEvents::registerRenderers);
+        modEventBus.addListener(ModernTurntableClientEvents::registerBlockRenderLayers);
         modEventBus.addListener(CuriosHeadGearLayer::register);
         // 1.21.1 没有 RegisterPictureInPictureRenderersEvent;PIP 渲染器直接注册到 shim 注册表。
         PortPictureInPictureRenderer.registerPipRenderer(HolographicPreviewPipRenderState.class,
@@ -71,6 +76,22 @@ public final class ModernTurntableClientEvents {
     private static void registerMenuScreens(RegisterMenuScreensEvent event) {
         event.register(ModMenus.MEDIA_TOOL_BINDING.get(), MediaToolBindingScreen::new);
         event.register(ModMenus.MEDIA_TOOL_REPORT.get(), MediaToolReportScreen::new);
+    }
+
+    /**
+     * 1.21.1 没有 26.x 的「按材质 alpha 自动推断渲染层」机制:未显式注册的方块一律走 solid 层,
+     * alpha=0 的像素被画成黑色,0&lt;alpha&lt;255 的半透明像素被当作不透明处理。
+     * 现代唱片盒的玻璃罩恰好由 846 个半透明像素构成,因此在 1.21.1 上表现为完全不透明的实心罩。
+     * 上游 26.x 由材质 flags 从纹理自动推断,这里补齐等价的显式声明。
+     */
+    private static void registerBlockRenderLayers(FMLClientSetupEvent event) {
+        event.enqueueWork(() -> {
+            ItemBlockRenderTypes.setRenderLayer(ModBlocks.MODERN_TURNTABLE.get(), RenderType.translucent());
+            // 投影仪同源:projector_activated 模型的面引用了 390 个 alpha=0 与 96 个半透明像素
+            // (未激活态 818 个面全部不透明),因此整块声明为 translucent 才能与 26.x 的自动推断等价。
+            ItemBlockRenderTypes.setRenderLayer(ModBlocks.VIDEO_PROJECTOR.get(), RenderType.translucent());
+            ItemBlockRenderTypes.setRenderLayer(ModBlocks.LYRIC_PROJECTOR.get(), RenderType.translucent());
+        });
     }
 
     private static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {

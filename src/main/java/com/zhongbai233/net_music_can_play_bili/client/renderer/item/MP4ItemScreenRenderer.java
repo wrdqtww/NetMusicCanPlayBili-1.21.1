@@ -11,6 +11,7 @@ import com.zhongbai233.net_music_can_play_bili.client.MP4HandheldVideoClient;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.ClientDisplayProperties;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.RenderVertexUtils;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.IrisShaderpackCompat;
+import com.zhongbai233.net_music_can_play_bili.client.renderer.video.VideoBillboardPreview;
 import com.zhongbai233.net_music_can_play_bili.client.renderer.video.YuvVideoRenderTypes;
 import com.zhongbai233.net_music_can_play_bili.item.MP4Item;
 import com.zhongbai233.net_music_can_play_bili.media.sync.PlaybackSourceId;
@@ -101,10 +102,11 @@ public final class MP4ItemScreenRenderer {
         if (!(stack.getItem() instanceof MP4Item)) {
             return;
         }
+        // 未绑定设备时同样必须渲染:textureFor(null) 会落到 FALLBACK_SOURCE_ID,
+        // 离屏 GUI 依然会画出设备本体界面(队列/状态/时间)。Pad 从移植起就是这么做的
+        // (见 PadItemScreenRenderer#renderHeldOffscreenGuiFrameStart,它没有 null 提前返回),
+        // MP4 这里多出的 null 检查使未绑定的 MP4 屏幕永远停在空白纹理。
         UUID deviceId = MP4Item.readDeviceId(stack);
-        if (deviceId == null) {
-            return;
-        }
         textureFor(deviceId).renderFrameStart(deviceId);
     }
 
@@ -401,7 +403,7 @@ public final class MP4ItemScreenRenderer {
         SurfacePoint topRight = landscapeSurfacePoint(right, inset, bx0, by0, bx1, by1,
                 b0z, b1z, b2z, b3z);
         MP4HandheldVideoClient.markVisible(deviceId);
-        boolean useRgbaFallback = IrisShaderpackCompat.isShaderPackInUse();
+        boolean useRgbaFallback = VideoBillboardPreview.requiresRgbaFallback();
         MP4RgbaVideoLayer rgbaLayer = MP4RgbaVideoLayer.forDevice(deviceId);
         boolean rgba = useRgbaFallback && rgbaLayer.uploadLatest(deviceId);
         MP4Nv12VideoLayer layer = MP4Nv12VideoLayer.forDevice(deviceId);
