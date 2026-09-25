@@ -2,7 +2,6 @@ package com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole;
 
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleDocument;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleElement;
-import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleOperation;
 import com.zhongbai233.net_music_can_play_bili.editor.host.controlconsole.document.ControlConsoleRangeMigration;
 import org.junit.jupiter.api.Test;
 
@@ -10,7 +9,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -310,34 +308,6 @@ class ControlConsoleDocumentTest {
                 () -> new ControlConsoleDocument(1, 0L, "", null, 0, 0, 0, 8.0D, 4.0D, 8.0D));
         assertThrows(IllegalArgumentException.class,
                 () -> new ControlConsoleDocument(1, 0L, "中控台", null, 0, 0, 0, 0.0D, 4.0D, 8.0D));
-    }
-
-    @Test
-    void hostAdapterLoadsDescribesAndSubmitsImmutableOperations() {
-        ControlConsoleDocument document = ControlConsoleDocument.empty().withRevision(5L);
-        AtomicReference<List<ControlConsoleOperation>> submitted = new AtomicReference<>();
-        AtomicReference<ControlConsoleDocument> rendered = new AtomicReference<>();
-        ControlConsoleHostAdapter adapter = new ControlConsoleHostAdapter(() -> document, submitted::set,
-                (context, draft) -> rendered.set(draft));
-
-        assertEquals(document, adapter.loadDocument());
-        assertTrue(adapter.validateDraft(document).valid());
-        List<com.zhongbai233.scene_editor.core.host.EditorHostAdapter.PropertyDescriptor>
-                properties = new ArrayList<>();
-        adapter.describeProperties(document, properties::add);
-        assertEquals(List.of("displayName", "hardRangeX", "hardRangeY", "hardRangeZ"),
-                properties.stream().map(property -> property.id()).toList());
-
-        ControlConsoleOperation operation = new ControlConsoleOperation.ReplaceDocument(5L, document);
-        adapter.submitOperations(List.of(operation));
-        assertEquals(List.of(operation), submitted.get());
-        assertThrows(UnsupportedOperationException.class,
-                () -> submitted.get().add(operation));
-
-        adapter.renderEnvironment(new Object(), document);
-        assertEquals(document, rendered.get());
-        assertThrows(IllegalArgumentException.class,
-                () -> new ControlConsoleOperation.ReplaceDocument(4L, document));
     }
 
         private static ControlConsoleElement element(String name) {

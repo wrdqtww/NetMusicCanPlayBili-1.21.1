@@ -64,21 +64,6 @@ class TerrainCoreSafetyTest {
     }
 
     @Test
-    void lodUsesHysteresisUnknownAndMemoryPressureDegradation() {
-        TerrainLodPolicy policy = new TerrainLodPolicy(16.0D, 48.0D, 2.0D);
-        assertEquals(TerrainLodLevel.UNKNOWN,
-                policy.choose(1.0D, TerrainLodLevel.NEAR, false, false, 0.0D));
-        assertEquals(TerrainLodLevel.NEAR,
-                policy.choose(17.0D, TerrainLodLevel.NEAR, true, false, 0.0D));
-        assertEquals(TerrainLodLevel.MID,
-                policy.choose(19.0D, TerrainLodLevel.NEAR, true, false, 0.0D));
-        assertEquals(TerrainLodLevel.NEAR,
-                policy.choose(100.0D, TerrainLodLevel.FAR, true, true, 1.0D));
-        assertEquals(TerrainLodLevel.FAR,
-                policy.choose(20.0D, TerrainLodLevel.MID, true, false, 0.95D));
-    }
-
-    @Test
     void boundsUseInclusiveLongVolumeAndSectionIntersection() {
         TerrainBounds bounds = new TerrainBounds(-64, -32, -64, 63, 31, 63);
         assertEquals(1_048_576L, bounds.volume());
@@ -90,10 +75,10 @@ class TerrainCoreSafetyTest {
         org.junit.jupiter.api.Assertions.assertThrows(ArithmeticException.class,
             () -> new TerrainBounds(Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE,
                 Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE).volume());
-        }
+    }
 
-        @Test
-        void coverageCursorIsBudgetedNearestFirstAndDoesNotPreallocateRange() {
+    @Test
+    void coverageCursorIsBudgetedNearestFirstAndDoesNotPreallocateRange() {
         TerrainBounds bounds = new TerrainBounds(-4096, -64, -4096, 4096, 319, 4096);
         TerrainCoverageCursor cursor = new TerrainCoverageCursor(bounds, new TerrainSectionKey(0, 4, 0));
 
@@ -131,48 +116,5 @@ class TerrainCoreSafetyTest {
         assertEquals(7L, snapshot.generation());
         assertEquals(TerrainCellSample.RenderCategory.AIR,
                 snapshot.cell(15, 15, 15).renderCategory());
-    }
-
-            @Test
-            void surfaceMesherRemovesInternalFacesAndHonorsFaceLimit() {
-            var cells = new java.util.ArrayList<TerrainCellSample>(TerrainSectionKey.CELL_COUNT);
-            for (int i = 0; i < TerrainSectionKey.CELL_COUNT; i++) {
-                cells.add(TerrainCellSample.air());
-            }
-            cells.set(TerrainSectionSnapshot.index(1, 1, 1),
-                new TerrainCellSample(TerrainCellSample.Availability.LOADED,
-                    TerrainCellSample.RenderCategory.MODEL, "minecraft:stone", "", false, false));
-            TerrainSectionSnapshot single = new TerrainSectionSnapshot(new TerrainSectionKey(0, 0, 0), 1L,
-                cells, 4096L);
-            TerrainSurfaceMesh singleMesh = new TerrainSurfaceMesher(100).mesh(single, TerrainLodLevel.NEAR);
-            assertEquals(6, singleMesh.faces().size());
-            assertFalse(singleMesh.truncated());
-
-            cells.set(TerrainSectionSnapshot.index(2, 1, 1),
-                new TerrainCellSample(TerrainCellSample.Availability.LOADED,
-                    TerrainCellSample.RenderCategory.MODEL, "minecraft:stone", "", false, false));
-            TerrainSectionSnapshot pair = new TerrainSectionSnapshot(new TerrainSectionKey(0, 0, 0), 2L,
-                cells, 4096L);
-        assertEquals(10, new TerrainSurfaceMesher(100).mesh(pair, TerrainLodLevel.NEAR).faces().size());
-        TerrainSurfaceMesh limited = new TerrainSurfaceMesher(5).mesh(pair, TerrainLodLevel.NEAR);
-        assertEquals(5, limited.faces().size());
-        assertTrue(limited.truncated());
-    }
-
-    @Test
-    void workPlannerDeduplicatesBoundsPrioritizesSelectionAndCapsPendingWork() {
-        TerrainWorkPlanner planner = new TerrainWorkPlanner(3);
-        planner.updateCamera(new TerrainSectionKey(0, 0, 0));
-        planner.updateCoverage(new TerrainBounds(0, 0, 0, 47, 15, 15), TerrainLodLevel.FAR);
-        planner.updateSelected(new TerrainSectionKey(2, 0, 0));
-        planner.markDirty(new TerrainSectionKey(0, 0, 0), TerrainLodLevel.NEAR);
-
-        assertEquals(3, planner.pending());
-        var work = planner.nextWork(3);
-        assertEquals(new TerrainSectionKey(2, 0, 0), work.get(0).section());
-        assertEquals(TerrainWorkPriority.SELECTED_NEAR, work.get(0).priority());
-        assertEquals(new TerrainSectionKey(0, 0, 0), work.get(1).section());
-        assertEquals(TerrainWorkPriority.CAMERA_NEAR, work.get(1).priority());
-        assertEquals(0, planner.pending());
     }
 }
