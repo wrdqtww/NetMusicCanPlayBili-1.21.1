@@ -22,7 +22,10 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -31,8 +34,8 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * 歌词投影仪方块
  */
 public class LyricProjectorBlock extends Block implements EntityBlock {
-    public static final EnumProperty<Direction> FACING = EnumProperty.create("facing", Direction.class,
-            Direction.UP, Direction.DOWN);
+    /** 同视频投影仪：用全部六方向，保证旧存档的 {@code facing=up} 仍可解析。 */
+    public static final EnumProperty<Direction> FACING = BlockStateProperties.FACING;
     public static final BooleanProperty LINKED = BooleanProperty.create("linked");
     public static final BooleanProperty ACTIVATED = BooleanProperty.create("activated");
     private static final MapCodec<LyricProjectorBlock> CODEC = simpleCodec(LyricProjectorBlock::new);
@@ -61,7 +64,17 @@ public class LyricProjectorBlock extends Block implements EntityBlock {
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
-        return defaultBlockState().setValue(FACING, Direction.UP);
+        return defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
+    }
+
+    @Override
+    protected BlockState rotate(BlockState state, Rotation rotation) {
+        return state.setValue(FACING, rotation.rotate(state.getValue(FACING)));
+    }
+
+    @Override
+    protected BlockState mirror(BlockState state, Mirror mirror) {
+        return state.rotate(mirror.getRotation(state.getValue(FACING)));
     }
 
     @Override
@@ -89,17 +102,33 @@ public class LyricProjectorBlock extends Block implements EntityBlock {
     }
 
     /**
-     * 让投影面朝向放置者的水平视线方向，与视频投影仪保持一致。
+     * 放置者的水平朝向 → 投射面 yaw。
      *
-     * <p>{@code projectionYaw} 默认 180°（法线朝北），放置时按 {@code Direction#toYRot()} 写入初值，
-     * 使南/西/北/东分别对应 0°/90°/180°/270°。放置者可能为空（发射器），此时保留默认朝向。</p>
+     * <p>渲染侧屏幕法线为 {@code (sin yaw, 0, cos yaw)}：yaw 180° 时法线朝北，与方块实体
+     * {@code projectionYaw} 的既有默认值完全一致。要让屏幕正对放置者，法线必须指向其视线的
+     * 反方向，于是映射为 南→180°、东→270°、北→0°、西→90°。</p>
+     *
+     * <p><b>不能直接用 {@code Direction#toYRot()}：</b>那是实体 yaw 约定（南0/西90/北180/东270），
+     * 与渲染侧在东西两个方向上符号相反。实测正是"东西正确、南北反了"——因为两套约定在 0°/180°
+     * 上取值相同，只在 90°/270° 上相差一个符号。</p>
      */
+    private static float placementYaw(Direction facing) {
+        return switch (facing) {
+            case NORTH -> 0.0F;
+            case EAST -> 270.0F;
+            case SOUTH -> 180.0F;
+            case WEST -> 90.0F;
+            default -> 180.0F;
+        };
+    }
+
+    /** 让投影面正对放置者，映射规则与视频投影仪完全一致（见 {@link #placementYaw}）。 */
     private static void applyPlacementFacing(Level level, BlockPos pos, LivingEntity placer) {
         if (placer == null) {
             return;
         }
         if (level.getBlockEntity(pos) instanceof LyricProjectorBlockEntity projector) {
-            projector.setProjectionYaw(placer.getDirection().toYRot());
+            projector.setProjectionYaw(placementYaw(placer.getDirection()));
             projector.markDirtyAndSync();
         }
     }
