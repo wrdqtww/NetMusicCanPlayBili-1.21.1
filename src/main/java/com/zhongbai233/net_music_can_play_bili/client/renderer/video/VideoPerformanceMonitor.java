@@ -10,6 +10,18 @@ public final class VideoPerformanceMonitor {
     private static final long RESOURCE_SAMPLE_INTERVAL_NANOS = 500_000_000L;
 
     private final long[] decodeSamples = new long[MAX_DECODE_SAMPLES];
+    /**
+     * p95 的排序暂存区与按代次缓存。
+     *
+     * <p>{@code snapshot()} 在渲染线程上每帧会被调用 2–3 次，原实现每次 {@code Arrays.copyOf} 512 长
+     * 数组再 {@code Arrays.sort}，即每秒上百次 copy+sort 外加等量堆分配。p95 只取决于采样内容、
+     * 与调用时刻无关，因此这里复用一块预分配 scratch，并用"采样代次"做失效判据：只有解码线程写入
+     * 新样本时才重排一次。所有访问都在 {@code synchronized} 方法内，scratch 复用是安全的。</p>
+     */
+    private final long[] sortedScratch = new long[MAX_DECODE_SAMPLES];
+    private long sampleGeneration;
+    private long sortedGeneration = -1L;
+    private double cachedP95Millis;
     private int decodeSampleCount;
     private int decodeSampleCursor;
     private long decodeNanosTotal;
@@ -35,6 +47,9 @@ public final class VideoPerformanceMonitor {
         Arrays.fill(decodeSamples, 0L);
         decodeSampleCount = 0;
         decodeSampleCursor = 0;
+        sampleGeneration = 0L;
+        sortedGeneration = -1L;
+        cachedP95Millis = 0.0D;
         decodeNanosTotal = 0L;
         decodedFrames = 0L;
         starvationCount = 0L;
@@ -78,6 +93,7 @@ public final class VideoPerformanceMonitor {
         decodeSamples[decodeSampleCursor] = safe;
         decodeSampleCursor = (decodeSampleCursor + 1) % decodeSamples.length;
         decodeSampleCount = Math.min(decodeSamples.length, decodeSampleCount + 1);
+        sampleGeneration++;
     }
 
     public synchronized void recordStarvation() {
@@ -139,17 +155,26 @@ public final class VideoPerformanceMonitor {
         }
     }
 
+    /** 返回当前采样窗口的 p95 解码耗时；仅在采样代次变化时重排一次。 */
+    private double p95Millis() {
+        if (sortedGeneration != sampleGeneration) {
+            System.arraycopy(decodeSamples, 0, sortedScratch, 0, decodeSampleCount);
+            Arrays.sort(sortedScratch, 0, decodeSampleCount);
+            cachedP95Millis = decodeSampleCount == 0 ? 0.0D
+                    : sortedScratch[Math.min(decodeSampleCount - 1,
+                            (int) Math.ceil(decodeSampleCount * 0.95D) - 1)] / 1_000_000.0D;
+            sortedGeneration = sampleGeneration;
+        }
+        return cachedP95Millis;
+    }
+
     public synchronized VideoPerformanceFallbackPolicy.Snapshot snapshot(long nowNanos) {
         long observationNanos = observationNanos(nowNanos);
         double seconds = observationNanos / 1_000_000_000.0D;
         double actualFps = seconds > 0.0D ? decodedFrames / seconds : 0.0D;
         double averageMillis = decodedFrames > 0L
                 ? decodeNanosTotal / (double) decodedFrames / 1_000_000.0D : 0.0D;
-        long[] sorted = Arrays.copyOf(decodeSamples, decodeSampleCount);
-        Arrays.sort(sorted);
-        double p95Millis = sorted.length == 0 ? 0.0D
-                : sorted[Math.min(sorted.length - 1, (int) Math.ceil(sorted.length * 0.95D) - 1)]
-                        / 1_000_000.0D;
+        double p95Millis = p95Millis();
         long latestMagnitude = latestSyncDriftMillis == Long.MIN_VALUE
                 ? Long.MAX_VALUE : Math.abs(latestSyncDriftMillis);
         long driftGrowth = firstSyncDriftMagnitudeMillis == Long.MIN_VALUE

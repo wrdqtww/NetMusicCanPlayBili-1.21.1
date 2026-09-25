@@ -4,6 +4,10 @@ import com.mojang.logging.LogUtils;
 import net.neoforged.fml.ModList;
 import org.slf4j.Logger;
 
+import javax.annotation.Nullable;
+import java.lang.reflect.Method;
+import java.util.function.BooleanSupplier;
+
 /**
  * 可选 Iris 集成辅助工具。
  *
@@ -20,6 +24,15 @@ public final class IrisShaderpackCompat {
     private static volatile boolean initialized;
     private static volatile boolean available;
     private static volatile boolean lastShaderPackInUse;
+    /**
+     * 已解析一次并缓存的 Iris 状态探测句柄；Iris 不可用或解析失败时为 null。
+     *
+     * <p>{@code isShaderPackInUse()} 在渲染线程上每帧会被调用十几次（中控台、投影仪、掌机等
+     * 多处管线），原实现每次都要 {@code Class.forName} + 两次 {@code getMethod}（各遍历一遍声明
+     * 方法并复制 Method 对象）+ {@code invoke}。这里把类查找与方法解析挪到一次性初始化里，
+     * 热路径只剩一次 {@code invoke}。</p>
+     */
+    private static volatile BooleanSupplier shaderPackProbe;
 
     private IrisShaderpackCompat() {
     }
@@ -87,17 +100,12 @@ public final class IrisShaderpackCompat {
      */
     public static boolean isShaderPackInUse() {
         ensureInitialized();
-        if (!available) {
+        BooleanSupplier probe = shaderPackProbe;
+        if (!available || probe == null) {
             return false;
         }
         try {
-            boolean inUse;
-            try {
-                inUse = detectShaderPackInUse();
-            } catch (ReflectiveOperationException error) {
-                LOGGER.debug("Iris API 查询 shaderpack 状态失败，按未启用 shaderpack 处理", error);
-                return false;
-            }
+            boolean inUse = probe.getAsBoolean();
             if (inUse != lastShaderPackInUse) {
                 lastShaderPackInUse = inUse;
                 LOGGER.info("Iris shaderpack 状态变化: shaderpackInUse={}, customYuvShaderDisabled={}", inUse,
@@ -111,15 +119,36 @@ public final class IrisShaderpackCompat {
         }
     }
 
-    private static boolean detectShaderPackInUse() throws ReflectiveOperationException {
-        Class<?> apiClass = Class.forName("net.irisshaders.iris.api.v0.IrisApi");
-        Object api = apiClass.getMethod("getInstance").invoke(null);
+    /**
+     * 解析一次 Iris API 并返回探测句柄；任一步失败（类不存在、方法签名不符、调用抛错）返回 null。
+     *
+     * <p>1.21.1 的 Iris 有 {@code isShaderPackActive}，更老的版本只有 {@code isShaderPackInUse}，
+     * 因此先按新签名解析，失败再退回旧签名——两种都只在初始化时尝试一次。</p>
+     */
+    @Nullable
+    private static BooleanSupplier resolveShaderPackProbe() {
         try {
-            Object active = apiClass.getMethod("isShaderPackActive").invoke(api);
-            return Boolean.TRUE.equals(active);
-        } catch (NoSuchMethodException missingActiveMethod) {
-            Object inUse = apiClass.getMethod("isShaderPackInUse").invoke(api);
-            return Boolean.TRUE.equals(inUse);
+            Class<?> apiClass = Class.forName("net.irisshaders.iris.api.v0.IrisApi");
+            Object api = apiClass.getMethod("getInstance").invoke(null);
+            Method probe;
+            try {
+                probe = apiClass.getMethod("isShaderPackActive");
+            } catch (NoSuchMethodException missingActiveMethod) {
+                probe = apiClass.getMethod("isShaderPackInUse");
+            }
+            Method resolved = probe;
+            // Method.invoke 抛的是受检异常，而 BooleanSupplier 的 lambda 不能抛出受检异常，
+            // 所以在句柄内部就地兜住；任一步失败一律按"未启用 shaderpack"处理，与整体约定一致。
+            return () -> {
+                try {
+                    return Boolean.TRUE.equals(resolved.invoke(api));
+                } catch (ReflectiveOperationException error) {
+                    return false;
+                }
+            };
+        } catch (ReflectiveOperationException | RuntimeException error) {
+            LOGGER.debug("Iris API 解析失败，按未安装 Iris 处理", error);
+            return null;
         }
     }
 
@@ -137,14 +166,11 @@ public final class IrisShaderpackCompat {
                     available = false;
                     return;
                 }
-                try {
-                        detectShaderPackInUse();
-                    } catch (ReflectiveOperationException ignored) {
-                        available = false;
-                        return;
-                    }
-                    available = true;
-                LOGGER.debug("检测到 Iris API，启用 shaderpack 兼容检测");
+                shaderPackProbe = resolveShaderPackProbe();
+                available = shaderPackProbe != null;
+                if (available) {
+                    LOGGER.debug("检测到 Iris API，启用 shaderpack 兼容检测");
+                }
             } catch (LinkageError error) {
                 available = false;
             } catch (RuntimeException error) {

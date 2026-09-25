@@ -330,12 +330,25 @@ final class Fmp4NativeVideoDecodePump {
     }
 
     void releaseResources() {
+        drainLateFrames();
+        reusableBuffers.clear();
+        nativeNv12Buffers.retire();
+    }
+
+    /**
+     * 清空并关闭队列中剩余的帧。
+     *
+     * <p>关闭流程里本方法会被调用两次：一次在 {@code releaseResources()}，另一次在解码线程确认
+     * 终止之后。原因是释放与生产之间存在竞争窗口——解码线程在 offer 之前读到 {@code closed} 仍为
+     * false，于是可能在本队列刚被清空之后才把帧放进去（它随后的 {@code closed} 检查会直接 return，
+     * {@code finally} 又因为 {@code enqueued} 已置真而不关闭该帧）。这类帧不会再有任何消费者，
+     * 其 NV12 原生缓冲会永久泄漏。等到解码线程真正退出后再清一次即可根除：那时已不可能有新入队。</p>
+     */
+    void drainLateFrames() {
         QueuedDecodedFrame queued;
         while ((queued = frames.poll()) != null) {
             queued.frame().close();
         }
-        reusableBuffers.clear();
-        nativeNv12Buffers.retire();
     }
 
     private Fmp4NativeVideoDecoder.DecodedFrame acceptQueuedFrame(QueuedDecodedFrame queued, long waitStartNanos) {

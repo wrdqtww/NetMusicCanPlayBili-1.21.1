@@ -479,6 +479,10 @@ public final class Fmp4NativeVideoDecoder implements AutoCloseable {
             workerExit.complete(null);
         }
         decodePump.releaseResources();
+        // releaseResources() 与仍在运行的生产者之间存在竞争：迟到入队的帧不会被任何人消费，
+        // 其 NV12 原生缓冲会永久泄漏。workerExit 在解码线程退出时完成（线程本就不存活或已在上方
+        // 完成时则立即执行），因此在它之上再清一次即可覆盖全部迟到帧，且此时已不可能有新入队。
+        workerExit.whenComplete((ignored, error) -> decodePump.drainLateFrames());
     }
 
     /** Requests cancellation without waiting for the decoder worker to exit. */
